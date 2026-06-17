@@ -22,6 +22,7 @@ class JobPatch(BaseModel):
     chord_source: Optional[str] = None
     chord_source_url: Optional[str] = None
     capo: Optional[int] = None
+    duration_sec: Optional[float] = None
     error_msg: Optional[str] = None
     title: Optional[str] = None
     artist: Optional[str] = None
@@ -75,7 +76,7 @@ async def patch_job(job_id: str, patch: JobPatch):
 async def get_stems(job_id: str):
     with db() as conn:
         row = conn.execute(
-            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo FROM jobs WHERE id = ?", (job_id,)
+            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec FROM jobs WHERE id = ?", (job_id,)
         ).fetchone()
     if not row:
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -94,6 +95,7 @@ async def get_stems(job_id: str):
         "chord_source": row["chord_source"],
         "chord_source_url": row["chord_source_url"],
         "capo": row["capo"] or 0,
+        "duration_sec": row["duration_sec"],
     }
 
 

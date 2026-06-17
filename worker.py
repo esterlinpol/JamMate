@@ -14,6 +14,7 @@ The worker polls for pending jobs, processes them (Demucs → Opus transcode),
 uploads results, and marks the job done.
 """
 import argparse
+import json as _json
 import os
 import subprocess
 import sys
@@ -95,6 +96,49 @@ def _download_youtube(url: str, dest_dir: Path) -> tuple[Path, str, str]:
             if f.stem == "source":
                 return f, title, artist
     return mp3, title, artist
+
+
+# ---------------------------------------------------------------------------
+# Duration + Lyrics
+# ---------------------------------------------------------------------------
+
+def _get_duration(source_path: Path) -> float | None:
+    r = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(source_path)],
+        capture_output=True, text=True,
+    )
+    if r.returncode == 0:
+        try:
+            return float(_json.loads(r.stdout)["format"]["duration"])
+        except (KeyError, ValueError):
+            pass
+    return None
+
+
+def _fetch_lrclib(title: str, artist: str, duration: float | None) -> tuple[str | None, str | None]:
+    if not title:
+        return None, None
+    params = {"track_name": title, "artist_name": artist}
+    if duration:
+        params["duration"] = round(duration)
+        url = "https://lrclib.net/api/get"
+    else:
+        url = "https://lrclib.net/api/search"
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 404:
+            return None, None
+        data = r.json()
+        item = data[0] if isinstance(data, list) else data
+        if not item:
+            return None, None
+        if item.get("syncedLyrics"):
+            return item["syncedLyrics"], "lrclib"
+        if item.get("plainLyrics"):
+            return item["plainLyrics"], "lrclib-plain"
+    except Exception as e:
+        print(f"[worker] LRCLIB fetch failed: {e}", flush=True)
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -206,8 +250,23 @@ def _process_job(server: str, job: dict, device: str):
             _upload_stem(server, job_id, name, ogg_path)
             print(f"[worker] uploaded {name}.ogg", flush=True)
 
-        # ── Step 4: Mark done ─────────────────────────────────────────────
-        _patch(server, job_id, status="done", progress=100, progress_phase="Done")
+        # ── Step 4: Extract duration + fetch lyrics ───────────────────────
+        _patch(server, job_id, progress=95, progress_phase="Fetching lyrics…")
+        duration = _get_duration(source_path)
+        chord_data, chord_source = _fetch_lrclib(title, artist, duration)
+        if chord_data:
+            print(f"[worker] lyrics fetched ({chord_source})", flush=True)
+        else:
+            print("[worker] no lyrics found", flush=True)
+
+        # ── Step 5: Mark done ─────────────────────────────────────────────
+        done_patch: dict = {"status": "done", "progress": 100, "progress_phase": "Done"}
+        if duration is not None:
+            done_patch["duration_sec"] = duration
+        if chord_data:
+            done_patch["chord_data"] = chord_data
+            done_patch["chord_source"] = chord_source
+        _patch(server, job_id, **done_patch)
         print(f"[worker] job {job_id} complete ✓", flush=True)
 
 

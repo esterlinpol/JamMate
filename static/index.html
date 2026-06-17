@@ -95,6 +95,18 @@
     button { touch-action: manipulation; }
     button:active { transform: scale(0.96); }
     .no-scale:active { transform: none; }
+
+    /* Lyrics */
+    #lyrics-chordify-panel { scroll-behavior: smooth; }
+    #lyrics-chordify-content p { transition: opacity 0.2s, color 0.2s; }
+    #lyrics-spotify-panel  { scroll-behavior: smooth; }
+    #lyrics-spotify-content p { transition: opacity 0.3s, font-size 0.3s, font-weight 0.3s; }
+
+    /* Fade edges so invisible spacer lines don't show as empty black void */
+    #lyrics-spotify-panel.spotify-active {
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+      mask-image:         linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
+    }
   </style>
 </head>
 <body>
@@ -177,6 +189,13 @@
       <div id="player-title" class="font-bold text-[#f0fdf4] truncate leading-tight"></div>
       <div id="player-artist" class="text-[#86efac] text-xs truncate opacity-70"></div>
     </div>
+    <button id="lyrics-toggle-btn" onclick="cycleLyricsMode()"
+      class="hidden flex flex-col items-center p-2 transition-colors" title="Toggle lyrics">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h10M4 18h14"/>
+      </svg>
+      <span id="lyrics-mode-label" class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">OFF</span>
+    </button>
   </header>
 
   <!-- Transport -->
@@ -209,8 +228,18 @@
     </div>
   </div>
 
+  <!-- Lyrics: Chordify panel (between transport and stems) -->
+  <div id="lyrics-chordify-panel" class="hidden flex-shrink-0 overflow-y-auto border-b border-[#1e2e1e]" style="max-height:42vh">
+    <div id="lyrics-chordify-content" class="px-4 py-3 space-y-0.5"></div>
+  </div>
+
+  <!-- Lyrics: Spotify panel (takes flex-1 when active) -->
+  <div id="lyrics-spotify-panel" class="hidden overflow-y-auto">
+    <div id="lyrics-spotify-content" class="px-6 py-4 flex flex-col items-center"></div>
+  </div>
+
   <!-- Stem grid -->
-  <div class="flex-1 overflow-y-auto p-3">
+  <div id="stems-area" class="flex-1 overflow-y-auto p-3">
     <div id="stem-loading" class="flex flex-col items-center justify-center py-10 gap-2">
       <div class="spinner"></div>
       <span id="stem-loading-text" class="text-[#86efac] text-sm">Loading…</span>
@@ -325,6 +354,7 @@ const STEM_ICONS = {
 };
 const STATUS_COLOR = { done:'#22c55e', processing:'#fbbf24', pending:'#94a3b8', error:'#f87171' };
 const STATUS_LABEL = { done:'Ready', processing:'Processing…', pending:'Queued', error:'Error' };
+const LYRIC_OFFSET_SEC = 0.5;  // highlight lyric this many seconds before timestamp
 
 // ── State ─────────────────────────────────────────────────────────
 let audioCtx = null;
@@ -341,6 +371,13 @@ let activeTab = 'upload';
 let selectedFile = null;
 let _ytMetaTimer = null;
 
+// Lyrics
+let lyricsMode     = null;   // null | 'chordify' | 'spotify'
+let parsedLyrics   = null;   // [{time, text}] when synced LRC available
+let plainLyricsText= null;   // string when only plain lyrics available
+let currentLyricIdx= -1;
+let hasLyrics      = false;
+
 // ── Utilities ─────────────────────────────────────────────────────
 const esc = s => String(s||'')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -349,6 +386,20 @@ const fmtTime = s => {
   const m = Math.floor(s/60), sec = Math.floor(s%60);
   return `${m}:${String(sec).padStart(2,'0')}`;
 };
+
+function parseLRC(lrc) {
+  const lines = [];
+  for (const line of (lrc || '').split('\n')) {
+    const m = line.match(/^\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/);
+    if (!m) continue;
+    const text = m[4].trim();
+    if (text) lines.push({
+      time: +m[1] * 60 + +m[2] + +m[3] / (m[3].length === 3 ? 1000 : 100),
+      text
+    });
+  }
+  return lines;
+}
 
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
@@ -486,10 +537,24 @@ async function openPlayer(job) {
   $('time-current').textContent = '0:00';
   $('time-total').textContent = '0:00';
   totalDur = 0; offsetSec = 0;
+  lyricsMode = null; parsedLyrics = null; plainLyricsText = null;
+  currentLyricIdx = -1; hasLyrics = false;
+  $('lyrics-toggle-btn').classList.add('hidden');
+  $('lyrics-chordify-panel').classList.add('hidden');
+  $('lyrics-spotify-panel').classList.add('hidden');
+  $('lyrics-mode-label').textContent = 'OFF';
   showPlayer();
 
   try {
     const data = await api(`/api/stems/${job.id}`);
+    if (data.chord_source === 'lrclib' && data.chord_data) {
+      parsedLyrics = parseLRC(data.chord_data);
+      hasLyrics = parsedLyrics.length > 0;
+    } else if (data.chord_source === 'lrclib-plain' && data.chord_data) {
+      plainLyricsText = data.chord_data;
+      hasLyrics = true;
+    }
+    if (hasLyrics) $('lyrics-toggle-btn').classList.remove('hidden');
     await loadStems(job.id, data.stems || []);
   } catch(e) {
     $('stem-loading-text').textContent = 'Error: ' + e.message;
@@ -498,6 +563,8 @@ async function openPlayer(job) {
 
 function closePlayer() {
   stopAll();
+  lyricsMode = null; parsedLyrics = null; plainLyricsText = null;
+  currentLyricIdx = -1; hasLyrics = false;
   showLibrary();
 }
 
@@ -629,6 +696,7 @@ function doSeek(t) {
   if (was) pauseAll();
   offsetSec = Math.max(0, Math.min(totalDur, t));
   updateUI(offsetSec);
+  updateLyricIdx(offsetSec);
   if (was) play();
 }
 
@@ -637,12 +705,179 @@ function tick() {
   const elapsed = audioCtx.currentTime - startTime;
   if (elapsed >= totalDur) { pauseAll(); offsetSec = 0; return; }
   updateUI(elapsed);
+  updateLyricIdx(elapsed);
   rafId = requestAnimationFrame(tick);
 }
 
 function updateUI(t) {
   $('time-current').textContent = fmtTime(t);
   $('progress-fill').style.width = totalDur ? `${(t/totalDur)*100}%` : '0%';
+}
+
+// ── Lyrics ────────────────────────────────────────────────────────
+function cycleLyricsMode() {
+  if (!hasLyrics) return;
+  lyricsMode = lyricsMode === null ? 'chordify' : lyricsMode === 'chordify' ? 'spotify' : null;
+  applyLyricsMode();
+}
+
+function applyLyricsMode() {
+  const chordifyPanel = $('lyrics-chordify-panel');
+  const spotifyPanel  = $('lyrics-spotify-panel');
+  const stemsArea     = $('stems-area');
+  const stemGrid      = $('stem-grid');
+  const toggleBtn     = $('lyrics-toggle-btn');
+  const modeLabel     = $('lyrics-mode-label');
+
+  chordifyPanel.classList.add('hidden');
+  spotifyPanel.classList.add('hidden');
+  spotifyPanel.classList.remove('spotify-active');
+  spotifyPanel.style.flex = '';
+  spotifyPanel.style.minHeight = '';
+  $('lyrics-spotify-content').style.paddingTop = '';
+  $('lyrics-spotify-content').style.paddingBottom = '';
+  stemsArea.className = 'flex-1 overflow-y-auto p-3';
+  stemsArea.style.maxHeight = '';
+  stemsArea.style.paddingBottom = '';
+  stemGrid.style.gridTemplateColumns = '';
+  $('stem-hint').style.display = '';
+  toggleBtn.style.color = '';
+
+  if (lyricsMode === 'chordify') {
+    chordifyPanel.classList.remove('hidden');
+    modeLabel.textContent = 'CHORDS';
+    toggleBtn.style.color = '#22c55e';
+    renderLyricsChordify();
+    setTimeout(() => {
+      const el = $(`lyric-c-${currentLyricIdx}`);
+      if (el) el.scrollIntoView({ block: 'center' });
+    }, 50);
+  } else if (lyricsMode === 'spotify') {
+    spotifyPanel.classList.remove('hidden');
+    spotifyPanel.classList.add('spotify-active');
+    spotifyPanel.style.flex = '1';
+    spotifyPanel.style.minHeight = '0';  // required: prevents flex child from expanding past bounds
+    stemsArea.className = 'flex-shrink-0 overflow-y-auto p-2 border-t border-[#1e2e1e]';
+    stemsArea.style.maxHeight = '110px';
+    stemsArea.style.paddingBottom = 'max(8px, env(safe-area-inset-bottom))';
+    stemGrid.style.gridTemplateColumns = 'repeat(6, minmax(50px, 1fr))';
+    $('stem-hint').style.display = 'none';
+    modeLabel.textContent = 'LYRICS';
+    toggleBtn.style.color = '#22c55e';
+    renderLyricsSpotify();
+    // Pad so the first and last lyric lines can be centered in the panel
+    const halfH = Math.round(spotifyPanel.offsetHeight / 2);
+    $('lyrics-spotify-content').style.paddingTop = `${halfH}px`;
+    $('lyrics-spotify-content').style.paddingBottom = `${halfH}px`;
+    setTimeout(() => {
+      const idx = currentLyricIdx >= 0 ? currentLyricIdx : 0;
+      const el = $(`lyric-s-${idx}`);
+      if (el) el.scrollIntoView({ block: 'center' });
+    }, 50);
+  } else {
+    modeLabel.textContent = 'OFF';
+  }
+}
+
+function renderLyricsChordify() {
+  const container = $('lyrics-chordify-content');
+  container.innerHTML = '';
+  if (parsedLyrics && parsedLyrics.length) {
+    parsedLyrics.forEach((line, idx) => {
+      const p = document.createElement('p');
+      p.id = `lyric-c-${idx}`;
+      p.className = lyricChordifyClass(idx);
+      p.textContent = line.text;
+      p.addEventListener('click', () => doSeek(Math.max(0, line.time - LYRIC_OFFSET_SEC)));
+      container.appendChild(p);
+    });
+  } else if (plainLyricsText) {
+    const pre = document.createElement('pre');
+    pre.className = 'text-[#86efac] text-sm whitespace-pre-wrap font-sans leading-relaxed opacity-70';
+    pre.textContent = plainLyricsText;
+    container.appendChild(pre);
+  }
+}
+
+function renderLyricsSpotify() {
+  const container = $('lyrics-spotify-content');
+  container.innerHTML = '';
+  if (parsedLyrics && parsedLyrics.length) {
+    parsedLyrics.forEach((line, idx) => {
+      const p = document.createElement('p');
+      p.id = `lyric-s-${idx}`;
+      p.className = lyricSpotifyClass(idx, currentLyricIdx);
+      p.textContent = line.text;
+      p.addEventListener('click', () => doSeek(Math.max(0, line.time - LYRIC_OFFSET_SEC)));
+      container.appendChild(p);
+    });
+  } else if (plainLyricsText) {
+    const pre = document.createElement('pre');
+    pre.className = 'text-center text-[#86efac] text-base whitespace-pre-wrap font-sans leading-relaxed opacity-70';
+    pre.textContent = plainLyricsText;
+    container.appendChild(pre);
+  }
+}
+
+function lyricChordifyClass(idx) {
+  return idx === currentLyricIdx
+    ? 'text-[#f0fdf4] font-semibold text-sm py-1 cursor-pointer leading-snug'
+    : 'text-[#86efac] opacity-40 text-sm py-1 cursor-pointer leading-snug hover:opacity-70';
+}
+
+function lyricSpotifyClass(idx, activeIdx) {
+  // Lines beyond dist 2 collapse to invisible spacers — they still occupy scroll height
+  // so scrollIntoView can properly center the active line throughout the song.
+  if (activeIdx < 0) return 'text-center text-xs opacity-0 py-0.5 cursor-pointer';
+  const dist = Math.abs(idx - activeIdx);
+  if (dist === 0) return 'text-center text-[#f0fdf4] font-bold text-xl py-3 cursor-pointer leading-snug';
+  if (dist === 1) return 'text-center text-[#86efac] text-base opacity-55 py-1.5 cursor-pointer leading-snug';
+  if (dist === 2) return 'text-center text-[#86efac] text-sm opacity-25 py-1 cursor-pointer leading-snug';
+  return 'text-center text-xs opacity-0 py-0.5 cursor-pointer';
+}
+
+function updateLyricIdx(t) {
+  if (!parsedLyrics || !parsedLyrics.length || !lyricsMode) return;
+  const tAhead = t + LYRIC_OFFSET_SEC;
+  let idx = -1;
+  for (let i = parsedLyrics.length - 1; i >= 0; i--) {
+    if (parsedLyrics[i].time <= tAhead) { idx = i; break; }
+  }
+  if (idx === currentLyricIdx) return;
+  const prev = currentLyricIdx;
+  currentLyricIdx = idx;
+  updateLyricDisplay(prev, idx);
+}
+
+function updateLyricDisplay(prevIdx, newIdx) {
+  if (lyricsMode === 'chordify') {
+    if (prevIdx >= 0) {
+      const el = $(`lyric-c-${prevIdx}`);
+      if (el) el.className = lyricChordifyClass(prevIdx);
+    }
+    if (newIdx >= 0) {
+      const el = $(`lyric-c-${newIdx}`);
+      if (el) {
+        el.className = lyricChordifyClass(newIdx);
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+  } else if (lyricsMode === 'spotify') {
+    const range = 5;
+    const toUpdate = new Set();
+    for (let d = -range; d <= range; d++) {
+      if (prevIdx + d >= 0) toUpdate.add(prevIdx + d);
+      if (newIdx  + d >= 0) toUpdate.add(newIdx  + d);
+    }
+    toUpdate.forEach(i => {
+      const el = $(`lyric-s-${i}`);
+      if (el) el.className = lyricSpotifyClass(i, newIdx);
+    });
+    if (newIdx >= 0) {
+      const el = $(`lyric-s-${newIdx}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
 }
 
 // ── Add Song ──────────────────────────────────────────────────────

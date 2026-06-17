@@ -46,6 +46,7 @@ def init_db():
                 chord_source TEXT,
                 chord_source_url TEXT,
                 capo INTEGER NOT NULL DEFAULT 0,
+                duration_sec REAL,
                 progress REAL NOT NULL DEFAULT 0,
                 progress_phase TEXT,
                 error_msg TEXT,
@@ -68,3 +69,5 @@ def init_db():
             conn.execute("ALTER TABLE jobs ADD COLUMN chord_source_url TEXT")
         if "capo" not in existing:
             conn.execute("ALTER TABLE jobs ADD COLUMN capo INTEGER NOT NULL DEFAULT 0")
+        if "duration_sec" not in existing:
+            conn.execute("ALTER TABLE jobs ADD COLUMN duration_sec REAL")
