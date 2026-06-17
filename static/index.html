@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>JamMate</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      '#0a0f0a',
+            surface: '#111811',
+            card:    '#172017',
+            border:  '#1e2e1e',
+            primary: '#22c55e',
+            pdim:    '#16a34a',
+            text:    '#f0fdf4',
+            muted:   '#86efac',
+            warn:    '#fbbf24',
+            danger:  '#f87171',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html { font-size: 19px; }
+    html, body { height: 100%; margin: 0; background: #0a0f0a; color: #f0fdf4;
+      font-family: system-ui, -apple-system, sans-serif; overscroll-behavior: none; }
+
+    /* Max-width container — centers content on wide screens */
+    #app-container { max-width: 1024px; margin: 0 auto; position: relative; height: 100%; }
+
+    /* Stem buttons */
+    .stem-btn {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px; padding: 10px 4px; border-radius: 12px;
+      border: 1.5px solid transparent; cursor: pointer;
+      transition: opacity 0.15s, border-color 0.15s, background 0.15s;
+      font-size: 0.65rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; min-height: 64px; width: 100%;
+      user-select: none; -webkit-user-select: none;
+    }
+    .stem-btn.muted { opacity: 0.25; }
+
+    /* Progress bar */
+    #progress-bar { height: 6px; background: #1e2e1e; border-radius: 3px; cursor: pointer;
+      position: relative; }
+    #progress-fill { height: 100%; background: #22c55e; border-radius: 3px;
+      width: 0%; pointer-events: none; }
+    #progress-bar::after { content: ''; position: absolute; inset: -8px 0; }
+
+    /* Bottom sheet */
+    #sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+      z-index: 40; display: none; backdrop-filter: blur(2px); }
+    #sheet { position: fixed; bottom: 0;
+      left: max(0px, calc(50% - 512px)); right: max(0px, calc(50% - 512px));
+      background: #111811; border-radius: 20px 20px 0 0; z-index: 50;
+      padding: 16px 20px max(32px, env(safe-area-inset-bottom));
+      display: none; max-height: 92vh; overflow-y: auto;
+      border-top: 1px solid #1e2e1e; }
+    #sheet.open, #sheet-backdrop.open { display: block; }
+
+    /* Portrait */
+    @media (orientation: portrait) {
+      #library-view { display: flex; flex-direction: column; height: 100svh; }
+      #player-view  { display: flex; flex-direction: column; height: 100svh; }
+      #stem-grid    { grid-template-columns: repeat(3, 1fr); }
+    }
+    /* Landscape — maximize use of screen width for chord bar */
+    @media (orientation: landscape) {
+      #library-view { display: flex; flex-direction: column; height: 100dvh; overflow-y: auto; }
+      #player-view  { display: flex; flex-direction: column; height: 100dvh; }
+      #stem-grid    { grid-template-columns: repeat(6, 1fr); }
+    }
+
+    .spinner { display: inline-block; width: 18px; height: 18px;
+      border: 2px solid #1e2e1e; border-top-color: #22c55e;
+      border-radius: 50%; animation: spin 0.75s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    ::-webkit-scrollbar { width: 3px; height: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1e2e1e; border-radius: 2px; }
+
+    input, select { background: #0a0f0a; color: #f0fdf4; border: 1px solid #1e2e1e;
+      border-radius: 8px; padding: 11px 12px; outline: none; width: 100%;
+      font-size: 0.9rem; }
+    input:focus, select:focus { border-color: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,0.15); }
+    select option { background: #111811; }
+
+    button { touch-action: manipulation; }
+    button:active { transform: scale(0.96); }
+    .no-scale:active { transform: none; }
+  </style>
+</head>
+<body>
+<div id="app-container">
+
+<!-- ═══════════════════════════════════════════════════
+     LIBRARY VIEW
+═══════════════════════════════════════════════════ -->
+<div id="library-view">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between px-4 py-3 border-b border-[#1e2e1e] flex-shrink-0 bg-[#0a0f0a]">
+    <div class="flex items-center gap-2">
+      <svg class="w-5 h-5 text-[#22c55e]" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z"/>
+      </svg>
+      <div>
+        <span class="font-bold text-[#f0fdf4] text-base">JamMate</span>
+        <a href="https://github.com/esterlinpol/JamMate" target="_blank" rel="noopener"
+          class="block text-[0.6rem] text-[#86efac] opacity-40 hover:opacity-70 leading-none mt-0.5 transition-opacity">
+          by esterlinpol
+        </a>
+      </div>
+    </div>
+    <div class="flex items-center gap-1">
+      <button onclick="refreshLibrary()" class="p-2 text-[#86efac] hover:text-[#22c55e] transition-colors" title="Refresh">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0114.85-3.15L20 9M4 15l1.15 3.15A9 9 0 0020 15"/>
+        </svg>
+      </button>
+      <button onclick="openSettings()" class="p-2 text-[#86efac] hover:text-[#22c55e] transition-colors" title="Settings">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Status banner -->
+  <div id="worker-banner" class="hidden"></div>
+
+  <!-- Song grid -->
+  <div class="flex-1 overflow-y-auto">
+    <div id="song-grid" class="grid grid-cols-2 gap-3 p-4"></div>
+    <div id="empty-state" class="hidden flex flex-col items-center justify-center py-20 px-8 text-center">
+      <svg class="w-14 h-14 mb-4 text-[#1e2e1e]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+      </svg>
+      <p class="font-semibold text-[#86efac] mb-1">No songs yet</p>
+      <p class="text-sm text-[#86efac] opacity-50">Tap the button below to add your first song</p>
+    </div>
+  </div>
+
+  <!-- Add FAB -->
+  <div class="flex-shrink-0 px-4 pt-3 pb-6 border-t border-[#1e2e1e] bg-[#0a0f0a]" style="padding-bottom: max(24px, env(safe-area-inset-bottom))">
+    <button onclick="openAddSheet()"
+      class="no-scale w-full py-3.5 rounded-2xl bg-[#22c55e] text-[#0a0f0a] font-bold text-base flex items-center justify-center gap-2 active:bg-[#16a34a]">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+      </svg>
+      Add Song
+    </button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     PLAYER VIEW
+═══════════════════════════════════════════════════ -->
+<div id="player-view" class="bg-[#0a0f0a]" style="display:none">
+
+  <!-- Player header -->
+  <header class="flex items-center gap-2 px-3 py-3 border-b border-[#1e2e1e] flex-shrink-0">
+    <button onclick="closePlayer()" class="p-2 text-[#86efac] hover:text-[#22c55e] -ml-1">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </button>
+    <div class="flex-1 min-w-0">
+      <div id="player-title" class="font-bold text-[#f0fdf4] truncate leading-tight"></div>
+      <div id="player-artist" class="text-[#86efac] text-xs truncate opacity-70"></div>
+    </div>
+  </header>
+
+  <!-- Transport -->
+  <div class="flex-shrink-0 px-4 py-3 bg-[#0a0f0a] border-b border-[#1e2e1e]">
+    <div id="progress-bar" class="mb-2.5" onclick="seekTo(event)" ontouchstart="touchSeek(event)" ontouchmove="touchSeek(event)">
+      <div id="progress-fill"></div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="time-current" class="text-[#86efac] text-xs tabular-nums w-9">0:00</span>
+      <div class="flex-1 flex items-center justify-center gap-5">
+        <button onclick="seekRelative(-10)" class="p-2 text-[#86efac] active:text-[#22c55e]">
+          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+            <text x="9.5" y="14.5" font-size="5" fill="currentColor" font-family="system-ui" font-weight="bold">10</text>
+          </svg>
+        </button>
+        <button id="play-btn" onclick="togglePlay()"
+          class="no-scale w-14 h-14 rounded-full bg-[#22c55e] text-[#0a0f0a] flex items-center justify-center shadow-lg active:bg-[#16a34a]">
+          <svg id="icon-play" class="w-7 h-7 translate-x-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <svg id="icon-pause" class="w-7 h-7 hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+        </button>
+        <button onclick="seekRelative(10)" class="p-2 text-[#86efac] active:text-[#22c55e]">
+          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/>
+            <text x="9.5" y="14.5" font-size="5" fill="currentColor" font-family="system-ui" font-weight="bold">10</text>
+          </svg>
+        </button>
+      </div>
+      <span id="time-total" class="text-[#86efac] text-xs tabular-nums w-9 text-right">0:00</span>
+    </div>
+  </div>
+
+  <!-- Stem grid -->
+  <div class="flex-1 overflow-y-auto p-3">
+    <div id="stem-loading" class="flex flex-col items-center justify-center py-10 gap-2">
+      <div class="spinner"></div>
+      <span id="stem-loading-text" class="text-[#86efac] text-sm">Loading…</span>
+    </div>
+    <div id="stem-grid" class="hidden grid gap-2"></div>
+    <p id="stem-hint" class="hidden text-center text-[#86efac] text-xs mt-3 opacity-40">
+      Tap to mute · Long-press to solo
+    </p>
+  </div>
+</div>
+
+</div><!-- /app-container -->
+
+<!-- ═══════════════════════════════════════════════════
+     ADD SONG BOTTOM SHEET
+═══════════════════════════════════════════════════ -->
+<div id="sheet-backdrop" onclick="closeSheet()"></div>
+<div id="sheet">
+  <div class="w-10 h-1 bg-[#1e2e1e] rounded-full mx-auto mb-5"></div>
+  <h2 class="font-bold text-lg text-[#f0fdf4] mb-4">Add Song</h2>
+
+  <div class="flex gap-2 mb-5">
+    <button id="tab-upload" onclick="switchTab('upload')"
+      class="flex-1 py-2.5 rounded-xl text-sm font-semibold">Upload MP3</button>
+    <button id="tab-youtube" onclick="switchTab('youtube')"
+      class="flex-1 py-2.5 rounded-xl text-sm font-semibold">YouTube</button>
+  </div>
+
+  <div id="panel-upload">
+    <div id="drop-zone"
+      class="border-2 border-dashed border-[#1e2e1e] rounded-2xl p-8 text-center mb-4 cursor-pointer active:border-[#22c55e]"
+      onclick="document.getElementById('file-input').click()"
+      ondrop="handleDrop(event)" ondragover="event.preventDefault()">
+      <svg class="w-8 h-8 mx-auto mb-3 text-[#1e2e1e]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+      </svg>
+      <p class="text-[#86efac] text-sm">Tap to choose audio file</p>
+      <p class="text-[#86efac] text-xs mt-1 opacity-40">MP3 · WAV · FLAC · M4A</p>
+      <input id="file-input" type="file" accept="audio/*" class="hidden" onchange="handleFileSelect(event)">
+    </div>
+    <div id="file-chosen" class="hidden mb-4 px-3 py-2 bg-[#172017] rounded-xl text-sm text-[#22c55e] border border-[#1e2e1e] truncate"></div>
+  </div>
+
+  <div id="panel-youtube" class="hidden mb-4">
+    <label class="text-xs text-[#86efac] mb-1.5 block">YouTube URL</label>
+    <input id="yt-url" type="url" placeholder="https://www.youtube.com/watch?v=…" oninput="onYtUrlInput()" />
+    <p id="yt-meta-status" class="hidden text-xs text-[#86efac] mt-1.5 opacity-60"></p>
+  </div>
+
+  <div class="grid grid-cols-2 gap-3 mb-5">
+    <div>
+      <label class="text-xs text-[#86efac] mb-1.5 block">Title</label>
+      <input id="meta-title" type="text" placeholder="Song title" />
+    </div>
+    <div>
+      <label class="text-xs text-[#86efac] mb-1.5 block">Artist</label>
+      <input id="meta-artist" type="text" placeholder="Artist name" />
+    </div>
+  </div>
+
+  <button id="add-btn" onclick="submitSong()"
+    class="no-scale w-full py-3.5 rounded-2xl bg-[#22c55e] text-[#0a0f0a] font-bold text-base active:bg-[#16a34a]">
+    Add to Queue
+  </button>
+  <p id="add-error" class="hidden text-[#f87171] text-sm text-center mt-3"></p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     SETTINGS PANEL
+═══════════════════════════════════════════════════ -->
+<div id="settings-backdrop" class="fixed inset-0 bg-black/60 z-40 hidden" onclick="closeSettings()"></div>
+<div id="settings-panel" class="hidden fixed bottom-0 bg-[#111811] border-t border-[#1e2e1e] z-50 rounded-t-2xl p-5"
+  style="left: max(0px, calc(50% - 512px)); right: max(0px, calc(50% - 512px));"
+  style="padding-bottom: max(32px, env(safe-area-inset-bottom))">
+  <div class="w-10 h-1 bg-[#1e2e1e] rounded-full mx-auto mb-5"></div>
+  <h2 class="font-bold text-lg text-[#f0fdf4] mb-5">Settings</h2>
+
+  <div class="space-y-5">
+    <div>
+      <label class="text-xs text-[#86efac] uppercase tracking-widest mb-2 block">Processing Device</label>
+      <div class="flex gap-2">
+        <button id="device-mps" onclick="setDevice('mps')" class="device-btn flex-1 py-3 rounded-xl text-sm font-semibold border transition-all">Mac (MPS)</button>
+        <button id="device-cpu" onclick="setDevice('cpu')" class="device-btn flex-1 py-3 rounded-xl text-sm font-semibold border transition-all">Server CPU</button>
+      </div>
+      <p class="text-xs text-[#86efac] mt-2 opacity-50">Start worker.py on the chosen machine with the matching --device flag</p>
+    </div>
+
+    <div>
+      <label class="text-xs text-[#86efac] uppercase tracking-widest mb-2 block">Worker Status</label>
+      <div id="worker-status-text" class="text-sm text-[#86efac] bg-[#172017] rounded-xl px-3 py-2.5 border border-[#1e2e1e]">
+        Checking…
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     JavaScript
+═══════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+// ── Constants ─────────────────────────────────────────────────────
+const PX_PER_SEC = 60;
+const STEM_ORDER = ['drums', 'bass', 'guitar', 'piano', 'vocals', 'other'];
+const STEM_COLORS = {
+  drums: '#ef4444', bass: '#3b82f6', guitar: '#22c55e',
+  piano: '#a855f7', vocals: '#f59e0b', other: '#94a3b8'
+};
+const STEM_ICONS = {
+  drums: '🥁', bass: '🎵', guitar: '🎸', piano: '🎹', vocals: '🎤', other: '〜'
+};
+const STATUS_COLOR = { done:'#22c55e', processing:'#fbbf24', pending:'#94a3b8', error:'#f87171' };
+const STATUS_LABEL = { done:'Ready', processing:'Processing…', pending:'Queued', error:'Error' };
+
+// ── State ─────────────────────────────────────────────────────────
+let audioCtx = null;
+let stemsMap = {};   // name → { buffer, source, gain, muted }
+let isPlaying = false;
+let startTime  = 0;  // audioCtx.currentTime at which playback began
+let offsetSec  = 0;  // playback position when paused/seeked
+let totalDur   = 0;
+let currentJobId = null;
+let rafId = null;
+let pollTimer = null;
+let lpTimer = null;  // long-press timer
+let activeTab = 'upload';
+let selectedFile = null;
+let _ytMetaTimer = null;
+
+// ── Utilities ─────────────────────────────────────────────────────
+const esc = s => String(s||'')
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+const fmtTime = s => {
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  return `${m}:${String(sec).padStart(2,'0')}`;
+};
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { const t = await r.text(); throw new Error(t || `HTTP ${r.status}`); }
+  return r.json();
+}
+
+// ── Views ─────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function showLibrary() {
+  $('library-view').style.display = '';
+  $('player-view').style.display = 'none';
+}
+function showPlayer() {
+  $('library-view').style.display = 'none';
+  $('player-view').style.display = '';
+}
+
+// ── Library ───────────────────────────────────────────────────────
+function renderCard(job) {
+  const col = STATUS_COLOR[job.status] || '#94a3b8';
+  const lbl = STATUS_LABEL[job.status] || job.status;
+
+  // Use a <button> for done songs so iOS/Android fire click reliably.
+  // Non-done cards use a div (not interactive, no native click expected).
+  const el = job.status === 'done'
+    ? document.createElement('button')
+    : document.createElement('div');
+
+  el.className = 'bg-[#172017] rounded-2xl p-3 border border-[#1e2e1e] w-full text-left select-none';
+  if (job.status === 'done') el.style.cursor = 'pointer';
+  el.style.borderLeftColor = col;
+  el.style.borderLeftWidth = '3px';
+  // touch-action: manipulation eliminates the 300ms click delay on mobile
+  el.style.touchAction = 'manipulation';
+
+  el.innerHTML = `
+    <div class="flex items-center justify-between mb-1.5">
+      <div class="w-2 h-2 rounded-full flex-shrink-0" style="background:${col}"></div>
+      <div class="flex items-center gap-2">
+        <span class="text-xs" style="color:${col}">${lbl}</span>
+        <button class="delete-btn p-0.5 text-[#86efac] opacity-30 hover:opacity-80 hover:text-[#f87171] transition-opacity active:scale-95" title="Delete song">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <p class="font-semibold text-sm text-[#f0fdf4] leading-snug mb-0.5 line-clamp-2">${esc(job.title || job.filename)}</p>
+    ${job.artist ? `<p class="text-xs text-[#86efac] truncate opacity-70">${esc(job.artist)}</p>` : ''}
+    ${job.status === 'processing' ? `
+      <div class="mt-2">
+        <div class="h-1 bg-[#1e2e1e] rounded-full overflow-hidden">
+          <div class="h-full bg-[#fbbf24] rounded-full transition-all" style="width:${job.progress||0}%"></div>
+        </div>
+        <p class="text-xs text-[#86efac] mt-1 opacity-60 truncate">${esc(job.progress_phase||'Processing…')}</p>
+      </div>` : ''}
+    ${job.status === 'error' ? `<p class="text-xs text-[#f87171] mt-1 truncate">${esc(job.error_msg||'Failed')}</p>` : ''}
+  `;
+
+  if (job.status === 'done') {
+    el.addEventListener('click', () => openPlayer(job));
+  }
+
+  // Delete button
+  el.querySelector('.delete-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    confirmDelete(job);
+  });
+
+  // Long-press to delete — track pointer position to avoid triggering on scroll
+  let lpX = 0, lpY = 0;
+  el.addEventListener('pointerdown', e => {
+    lpX = e.clientX; lpY = e.clientY;
+    lpTimer = setTimeout(() => confirmDelete(job), 800);
+  });
+  el.addEventListener('pointermove', e => {
+    // Cancel long-press only if finger moved more than 8px (genuine scroll)
+    if (Math.hypot(e.clientX - lpX, e.clientY - lpY) > 8) clearTimeout(lpTimer);
+  });
+  el.addEventListener('pointerup', () => clearTimeout(lpTimer));
+  el.addEventListener('pointercancel', () => clearTimeout(lpTimer));
+
+  return el;
+}
+
+async function refreshLibrary() {
+  try {
+    const jobs = await api('/api/jobs');
+    const grid = $('song-grid');
+    const empty = $('empty-state');
+    grid.innerHTML = '';
+    if (!jobs.length) { empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    jobs.forEach(j => grid.appendChild(renderCard(j)));
+    updateBanner(jobs);
+  } catch(e) { console.error('library refresh:', e); }
+}
+
+function updateBanner(jobs) {
+  const b = $('worker-banner');
+  const proc = jobs.filter(j => j.status === 'processing');
+  const pend = jobs.filter(j => j.status === 'pending');
+  if (proc.length) {
+    b.className = 'px-4 py-2 text-xs text-center border-b border-[#1e2e1e] text-[#fbbf24] bg-[#111811]';
+    b.textContent = `Processing: ${proc[0].title || 'Song'} — ${proc[0].progress||0}%`;
+    b.classList.remove('hidden');
+  } else if (pend.length) {
+    b.className = 'px-4 py-2 text-xs text-center border-b border-[#1e2e1e] text-[#86efac] bg-[#111811]';
+    b.textContent = `${pend.length} song${pend.length>1?'s':''} queued — start worker.py to process`;
+    b.classList.remove('hidden');
+  } else { b.classList.add('hidden'); }
+}
+
+async function confirmDelete(job) {
+  if (!confirm(`Delete "${job.title || job.filename}"? This cannot be undone.`)) return;
+  await api(`/api/jobs/${job.id}`, { method: 'DELETE' });
+  refreshLibrary();
+}
+
+// ── Player ────────────────────────────────────────────────────────
+async function openPlayer(job) {
+  currentJobId = job.id;
+  stopAll();
+  stemsMap = {};
+
+  $('player-title').textContent = job.title || job.filename || 'Song';
+  $('player-artist').textContent = job.artist || '';
+  $('stem-grid').classList.add('hidden');
+  $('stem-hint').classList.add('hidden');
+  $('stem-loading').classList.remove('hidden');
+  $('stem-loading-text').textContent = 'Loading stems…';
+  $('progress-fill').style.width = '0%';
+  $('time-current').textContent = '0:00';
+  $('time-total').textContent = '0:00';
+  totalDur = 0; offsetSec = 0;
+  showPlayer();
+
+  try {
+    const data = await api(`/api/stems/${job.id}`);
+    await loadStems(job.id, data.stems || []);
+  } catch(e) {
+    $('stem-loading-text').textContent = 'Error: ' + e.message;
+  }
+}
+
+function closePlayer() {
+  stopAll();
+  showLibrary();
+}
+
+// ── Stems ─────────────────────────────────────────────────────────
+async function loadStems(jobId, stemFiles) {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  const grid = $('stem-grid');
+  grid.innerHTML = '';
+  const sorted = [...stemFiles].sort((a, b) => {
+    const n = f => f.replace(/\.(ogg|wav|mp3)$/, '');
+    return (STEM_ORDER.indexOf(n(a)) + 99) % 99 - (STEM_ORDER.indexOf(n(b)) + 99) % 99;
+  });
+
+  for (let i = 0; i < sorted.length; i++) {
+    const sf = sorted[i];
+    const name = sf.replace(/\.(ogg|wav|mp3)$/, '');
+    $('stem-loading-text').textContent = `Loading ${name} (${i+1}/${sorted.length})…`;
+
+    try {
+      const resp = await fetch(`/api/audio/${jobId}/${sf}`);
+      const ab = await resp.arrayBuffer();
+      const buf = await audioCtx.decodeAudioData(ab);
+      const gain = audioCtx.createGain();
+      gain.connect(audioCtx.destination);
+      stemsMap[name] = { buffer: buf, source: null, gain, muted: false };
+      if (buf.duration > totalDur) totalDur = buf.duration;
+
+      const color = STEM_COLORS[name] || '#94a3b8';
+      const btn = document.createElement('button');
+      btn.id = `stem-${name}`;
+      btn.className = 'stem-btn';
+      btn.style.color = color;
+      btn.style.borderColor = color;
+      btn.style.backgroundColor = color + '15';
+      btn.innerHTML = `<span style="font-size:1.4rem">${STEM_ICONS[name]||'♪'}</span><span>${name.toUpperCase()}</span>`;
+      btn.addEventListener('click', () => toggleStem(name));
+      btn.addEventListener('pointerdown', () => { lpTimer = setTimeout(() => soloStem(name), 600); });
+      ['pointerup','pointercancel'].forEach(e => btn.addEventListener(e, () => clearTimeout(lpTimer)));
+      grid.appendChild(btn);
+    } catch(e) {
+      console.error(`stem load failed: ${sf}`, e);
+    }
+  }
+
+  $('stem-loading').classList.add('hidden');
+  $('stem-grid').classList.remove('hidden');
+  $('stem-hint').classList.remove('hidden');
+  $('time-total').textContent = fmtTime(totalDur);
+}
+
+function toggleStem(name) {
+  const s = stemsMap[name];
+  if (!s) return;
+  s.muted = !s.muted;
+  s.gain.gain.setTargetAtTime(s.muted ? 0 : 1, audioCtx?.currentTime || 0, 0.02);
+  const btn = $(`stem-${name}`);
+  btn.classList.toggle('muted', s.muted);
+  btn.style.backgroundColor = s.muted ? 'transparent' : (STEM_COLORS[name]||'#94a3b8') + '15';
+}
+
+function soloStem(name) {
+  const isSolo = Object.entries(stemsMap).every(([n,s]) => n===name ? !s.muted : s.muted);
+  Object.entries(stemsMap).forEach(([n, s]) => {
+    s.muted = isSolo ? false : (n !== name);
+    s.gain.gain.setTargetAtTime(s.muted ? 0 : 1, audioCtx?.currentTime || 0, 0.02);
+    const btn = $(`stem-${n}`);
+    if (btn) {
+      btn.classList.toggle('muted', s.muted);
+      btn.style.backgroundColor = s.muted ? 'transparent' : (STEM_COLORS[n]||'#94a3b8') + '15';
+    }
+  });
+}
+
+// ── Playback ──────────────────────────────────────────────────────
+function togglePlay() { isPlaying ? pauseAll() : play(); }
+
+function play() {
+  if (!audioCtx || !Object.keys(stemsMap).length) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  const at = audioCtx.currentTime + 0.05;
+  Object.values(stemsMap).forEach(s => {
+    const src = audioCtx.createBufferSource();
+    src.buffer = s.buffer;
+    src.connect(s.gain);
+    src.start(at, offsetSec);
+    s.source = src;
+  });
+  startTime = at - offsetSec;
+  isPlaying = true;
+  $('icon-play').classList.add('hidden');
+  $('icon-pause').classList.remove('hidden');
+  rafId = requestAnimationFrame(tick);
+}
+
+function pauseAll() {
+  if (!isPlaying) return;
+  offsetSec = audioCtx.currentTime - startTime;
+  Object.values(stemsMap).forEach(s => { try { s.source?.stop(0); } catch(e){} s.source = null; });
+  isPlaying = false;
+  cancelAnimationFrame(rafId);
+  $('icon-play').classList.remove('hidden');
+  $('icon-pause').classList.add('hidden');
+}
+
+function stopAll() {
+  pauseAll();
+  offsetSec = 0;
+  $('progress-fill').style.width = '0%';
+  $('time-current').textContent = '0:00';
+}
+
+function seekTo(e) {
+  const rect = $('progress-bar').getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  doSeek(ratio * totalDur);
+}
+function touchSeek(e) {
+  e.preventDefault();
+  const touch = e.touches[0];
+  if (!touch) return;
+  const rect = $('progress-bar').getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
+  doSeek(ratio * totalDur);
+}
+function seekRelative(d) { doSeek(offsetSec + d); }
+function doSeek(t) {
+  const was = isPlaying;
+  if (was) pauseAll();
+  offsetSec = Math.max(0, Math.min(totalDur, t));
+  updateUI(offsetSec);
+  if (was) play();
+}
+
+function tick() {
+  if (!isPlaying) return;
+  const elapsed = audioCtx.currentTime - startTime;
+  if (elapsed >= totalDur) { pauseAll(); offsetSec = 0; return; }
+  updateUI(elapsed);
+  rafId = requestAnimationFrame(tick);
+}
+
+function updateUI(t) {
+  $('time-current').textContent = fmtTime(t);
+  $('progress-fill').style.width = totalDur ? `${(t/totalDur)*100}%` : '0%';
+}
+
+// ── Add Song ──────────────────────────────────────────────────────
+function openAddSheet() {
+  selectedFile = null;
+  $('meta-title').value = '';
+  $('meta-artist').value = '';
+  $('yt-url').value = '';
+  $('file-chosen').classList.add('hidden');
+  $('add-error').classList.add('hidden');
+  $('yt-meta-status').classList.add('hidden');
+  clearTimeout(_ytMetaTimer);
+  switchTab('upload');
+  $('sheet').classList.add('open');
+  $('sheet-backdrop').classList.add('open');
+}
+function closeSheet() {
+  $('sheet').classList.remove('open');
+  $('sheet-backdrop').classList.remove('open');
+}
+function switchTab(t) {
+  activeTab = t;
+  $('panel-upload').classList.toggle('hidden', t !== 'upload');
+  $('panel-youtube').classList.toggle('hidden', t !== 'youtube');
+  const a = 'flex-1 py-2.5 rounded-xl text-sm font-semibold bg-[#22c55e] text-[#0a0f0a]';
+  const i = 'flex-1 py-2.5 rounded-xl text-sm font-semibold bg-[#172017] text-[#86efac] border border-[#1e2e1e]';
+  $('tab-upload').className = t==='upload' ? a : i;
+  $('tab-youtube').className = t==='youtube' ? a : i;
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+}
+function handleFileSelect(e) {
+  const f = e.target.files[0];
+  if (f) setFile(f);
+}
+function setFile(f) {
+  selectedFile = f;
+  $('file-chosen').textContent = f.name;
+  $('file-chosen').classList.remove('hidden');
+  if (!$('meta-title').value) $('meta-title').value = f.name.replace(/\.[^/.]+$/, '');
+}
+
+async function onYtUrlInput() {
+  const url = $('yt-url').value.trim();
+  const st = $('yt-meta-status');
+  clearTimeout(_ytMetaTimer);
+  if (!url.match(/youtube|youtu\.be/i)) { st.classList.add('hidden'); return; }
+  st.textContent = 'Fetching info…';
+  st.classList.remove('hidden');
+  _ytMetaTimer = setTimeout(async () => {
+    try {
+      const data = await api(`/api/youtube/metadata?url=${encodeURIComponent(url)}`);
+      if (!$('meta-title').value && data.title)  $('meta-title').value  = data.title;
+      if (!$('meta-artist').value && data.artist) $('meta-artist').value = data.artist;
+      st.textContent = data.title ? '✓ Title fetched' : 'No title found';
+    } catch(e) {
+      st.textContent = 'Could not fetch info';
+    }
+    setTimeout(() => st.classList.add('hidden'), 2500);
+  }, 700);
+}
+
+async function submitSong() {
+  const err = $('add-error');
+  err.classList.add('hidden');
+  const btn = $('add-btn');
+  btn.disabled = true; btn.textContent = 'Adding…';
+  try {
+    const fd = new FormData();
+    if (activeTab === 'upload') {
+      if (!selectedFile) throw new Error('Please choose a file');
+      fd.append('file', selectedFile);
+      fd.append('model', 'htdemucs_6s');
+      fd.append('shifts', '0');
+      fd.append('title', $('meta-title').value);
+      fd.append('artist', $('meta-artist').value);
+      await api('/api/upload', { method: 'POST', body: fd });
+    } else {
+      const url = $('yt-url').value.trim();
+      if (!url) throw new Error('Please enter a YouTube URL');
+      fd.append('url', url);
+      fd.append('title', $('meta-title').value);
+      fd.append('artist', $('meta-artist').value);
+      await api('/api/youtube', { method: 'POST', body: fd });
+    }
+    closeSheet();
+    refreshLibrary();
+  } catch(e) {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add to Queue';
+  }
+}
+
+// ── Settings ──────────────────────────────────────────────────────
+async function openSettings() {
+  $('settings-panel').classList.remove('hidden');
+  $('settings-backdrop').classList.remove('hidden');
+  try {
+    const s = await api('/api/settings');
+    setDeviceUI(s.worker_device || 'cpu');
+    const ts = parseFloat(s.worker_last_seen || '0');
+    const ago = ts ? Math.round((Date.now()/1000 - ts) / 60) : null;
+    $('worker-status-text').textContent =
+      ago === null ? 'Worker has not connected yet'
+      : ago < 2   ? 'Worker active'
+      : ago < 60  ? `Last seen ${ago} min ago`
+      : `Last seen ${Math.round(ago/60)}h ago`;
+  } catch(e) { $('worker-status-text').textContent = 'Could not load settings'; }
+}
+function closeSettings() {
+  $('settings-panel').classList.add('hidden');
+  $('settings-backdrop').classList.add('hidden');
+}
+function setDeviceUI(d) {
+  const a = 'device-btn flex-1 py-3 rounded-xl text-sm font-semibold border border-[#22c55e] text-[#22c55e] bg-[#22c55e]/10 transition-all';
+  const i = 'device-btn flex-1 py-3 rounded-xl text-sm font-semibold border border-[#1e2e1e] text-[#86efac] transition-all';
+  $('device-mps').className = d==='mps' ? a : i;
+  $('device-cpu').className = d==='cpu' ? a : i;
+}
+async function setDevice(d) {
+  setDeviceUI(d);
+  await api('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ worker_device: d }) });
+}
+// ── Polling ───────────────────────────────────────────────────────
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    if ($('library-view').style.display !== 'none') refreshLibrary();
+  }, 5000);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────
+switchTab('upload');
+refreshLibrary();
+startPolling();
+</script>
+</body>
+</html>
