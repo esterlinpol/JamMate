@@ -1,0 +1,46 @@
+<div id="sheet-backdrop"></div>
+<div id="sheet">
+  <div class="w-10 h-1 bg-[#1e2e1e] rounded-full mx-auto mb-5"></div>
+  <h2 class="font-bold text-lg text-[#f0fdf4] mb-4">Add Song</h2>
+
+  <div class="flex gap-2 mb-5">
+    <button id="tab-upload" class="flex-1 py-2.5 rounded-xl text-sm font-semibold">Upload MP3</button>
+    <button id="tab-youtube" class="flex-1 py-2.5 rounded-xl text-sm font-semibold">YouTube</button>
+  </div>
+
+  <div id="panel-upload">
+    <div id="drop-zone"
+      class="border-2 border-dashed border-[#1e2e1e] rounded-2xl p-8 text-center mb-4 cursor-pointer active:border-[#22c55e]">
+      <svg class="w-8 h-8 mx-auto mb-3 text-[#1e2e1e]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+      </svg>
+      <p class="text-[#86efac] text-sm">Tap to choose audio file</p>
+      <p class="text-[#86efac] text-xs mt-1 opacity-40">MP3 · WAV · FLAC · M4A</p>
+      <input id="file-input" type="file" accept="audio/*" class="hidden">
+    </div>
+    <div id="file-chosen" class="hidden mb-4 px-3 py-2 bg-[#172017] rounded-xl text-sm text-[#22c55e] border border-[#1e2e1e] truncate"></div>
+  </div>
+
+  <div id="panel-youtube" class="hidden mb-4">
+    <label class="text-xs text-[#86efac] mb-1.5 block">YouTube URL</label>
+    <input id="yt-url" type="url" placeholder="https://www.youtube.com/watch?v=…" />
+    <p id="yt-meta-status" class="hidden text-xs text-[#86efac] mt-1.5 opacity-60"></p>
+  </div>
+
+  <div class="grid grid-cols-2 gap-3 mb-5">
+    <div>
+      <label class="text-xs text-[#86efac] mb-1.5 block">Title</label>
+      <input id="meta-title" type="text" placeholder="Song title" />
+    </div>
+    <div>
+      <label class="text-xs text-[#86efac] mb-1.5 block">Artist</label>
+      <input id="meta-artist" type="text" placeholder="Artist name" />
+    </div>
+  </div>
+
+  <button id="add-btn"
+    class="no-scale w-full py-3.5 rounded-2xl bg-[#22c55e] text-[#0a0f0a] font-bold text-base active:bg-[#16a34a]">
+    Add to Queue
+  </button>
+  <p id="add-error" class="hidden text-[#f87171] text-sm text-center mt-3"></p>
+</div>

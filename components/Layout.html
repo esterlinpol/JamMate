@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>JamMate</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg:      '#0a0f0a',
+            surface: '#111811',
+            card:    '#172017',
+            border:  '#1e2e1e',
+            primary: '#22c55e',
+            pdim:    '#16a34a',
+            text:    '#f0fdf4',
+            muted:   '#86efac',
+            warn:    '#fbbf24',
+            danger:  '#f87171',
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script type="module" src="/static/js/ui.js"></script>
+</head>
+<body>
+<div id="app-container">
+  <Library />
+  <Player />
+</div>
+<AddSheet />
+<Settings />
+</body>
+</html>

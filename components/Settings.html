@@ -1,0 +1,25 @@
+<div id="settings-backdrop" class="fixed inset-0 bg-black/60 z-40 hidden"></div>
+<div id="settings-panel"
+  class="hidden fixed bottom-0 bg-[#111811] border-t border-[#1e2e1e] z-50 rounded-t-2xl p-5"
+  style="left: max(0px, calc(50% - 512px)); right: max(0px, calc(50% - 512px)); padding-bottom: max(32px, env(safe-area-inset-bottom))">
+  <div class="w-10 h-1 bg-[#1e2e1e] rounded-full mx-auto mb-5"></div>
+  <h2 class="font-bold text-lg text-[#f0fdf4] mb-5">Settings</h2>
+
+  <div class="space-y-5">
+    <div>
+      <label class="text-xs text-[#86efac] uppercase tracking-widest mb-2 block">Processing Device</label>
+      <div class="flex gap-2">
+        <button id="device-mps" class="device-btn flex-1 py-3 rounded-xl text-sm font-semibold border transition-all">Mac (MPS)</button>
+        <button id="device-cpu" class="device-btn flex-1 py-3 rounded-xl text-sm font-semibold border transition-all">Server CPU</button>
+      </div>
+      <p class="text-xs text-[#86efac] mt-2 opacity-50">Start worker.py on the chosen machine with the matching --device flag</p>
+    </div>
+
+    <div>
+      <label class="text-xs text-[#86efac] uppercase tracking-widest mb-2 block">Worker Status</label>
+      <div id="worker-status-text" class="text-sm text-[#86efac] bg-[#172017] rounded-xl px-3 py-2.5 border border-[#1e2e1e]">
+        Checking…
+      </div>
+    </div>
+  </div>
+</div>
