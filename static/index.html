@@ -37,11 +37,11 @@
     /* Stem buttons */
     .stem-btn {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 3px; padding: 10px 4px; border-radius: 12px;
+      gap: 2px; padding: 8px 4px; border-radius: 10px;
       border: 1.5px solid transparent; cursor: pointer;
       transition: opacity 0.15s, border-color 0.15s, background 0.15s;
-      font-size: 0.65rem; font-weight: 700; letter-spacing: 0.06em;
-      text-transform: uppercase; min-height: 64px; width: 100%;
+      font-size: 0.6rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; min-height: 56px; width: 100%;
       user-select: none; -webkit-user-select: none;
     }
     .stem-btn.muted { opacity: 0.25; }
@@ -68,13 +68,11 @@
     @media (orientation: portrait) {
       #library-view { display: flex; flex-direction: column; height: 100svh; }
       #player-view  { display: flex; flex-direction: column; height: 100svh; }
-      #stem-grid    { grid-template-columns: repeat(3, 1fr); }
     }
-    /* Landscape — maximize use of screen width for chord bar */
+    /* Landscape */
     @media (orientation: landscape) {
       #library-view { display: flex; flex-direction: column; height: 100dvh; overflow-y: auto; }
       #player-view  { display: flex; flex-direction: column; height: 100dvh; }
-      #stem-grid    { grid-template-columns: repeat(6, 1fr); }
     }
 
     .spinner { display: inline-block; width: 18px; height: 18px;
@@ -100,7 +98,7 @@
     #lyrics-chordify-panel { scroll-behavior: smooth; }
     #lyrics-chordify-content p { transition: opacity 0.2s, color 0.2s; }
     #lyrics-spotify-panel  { scroll-behavior: smooth; }
-    #lyrics-spotify-content p { transition: opacity 0.3s, font-size 0.3s, font-weight 0.3s; }
+    #lyrics-spotify-content p { transition: opacity 0.3s; }
 
     /* Fade edges so invisible spacer lines don't show as empty black void */
     #lyrics-spotify-panel.spotify-active {
@@ -220,8 +218,29 @@
     </button>
   </header>
 
-  <!-- Transport -->
-  <div class="flex-shrink-0 px-4 py-3 bg-[#0a0f0a] border-b border-[#1e2e1e]">
+  <!-- Center: Lyrics area (takes all remaining vertical space) -->
+  <div id="lyrics-area" class="flex-1 min-h-0 overflow-hidden relative">
+    <!-- Chordify panel -->
+    <div id="lyrics-chordify-panel" class="hidden h-full overflow-y-auto">
+      <div id="lyrics-chordify-content" class="px-4 py-3 space-y-0.5"></div>
+    </div>
+    <!-- Spotify panel -->
+    <div id="lyrics-spotify-panel" class="hidden h-full overflow-y-auto">
+      <div id="lyrics-spotify-content" class="px-6 py-4 flex flex-col items-center"></div>
+    </div>
+  </div>
+
+  <!-- Stems: always visible strip above transport -->
+  <div id="stems-area" class="flex-shrink-0 border-t border-[#1e2e1e] px-2 pt-2">
+    <div id="stem-loading" class="flex flex-col items-center justify-center py-4 gap-2">
+      <div class="spinner"></div>
+      <span id="stem-loading-text" class="text-[#86efac] text-sm">Loading…</span>
+    </div>
+    <div id="stem-grid" class="hidden grid gap-1.5" style="grid-template-columns: repeat(6, 1fr)"></div>
+  </div>
+
+  <!-- Transport: progress bar + controls, pinned to bottom -->
+  <div class="flex-shrink-0 px-4 py-3 bg-[#0a0f0a] border-t border-[#1e2e1e]" style="padding-bottom: max(20px, env(safe-area-inset-bottom))">
     <div id="progress-bar" class="mb-2.5" onclick="seekTo(event)" ontouchstart="touchSeek(event)" ontouchmove="touchSeek(event)">
       <div id="progress-fill"></div>
     </div>
@@ -250,27 +269,6 @@
     </div>
   </div>
 
-  <!-- Lyrics: Chordify panel (between transport and stems) -->
-  <div id="lyrics-chordify-panel" class="hidden flex-shrink-0 overflow-y-auto border-b border-[#1e2e1e]" style="max-height:42vh">
-    <div id="lyrics-chordify-content" class="px-4 py-3 space-y-0.5"></div>
-  </div>
-
-  <!-- Lyrics: Spotify panel (takes flex-1 when active) -->
-  <div id="lyrics-spotify-panel" class="hidden overflow-y-auto">
-    <div id="lyrics-spotify-content" class="px-6 py-4 flex flex-col items-center"></div>
-  </div>
-
-  <!-- Stem grid -->
-  <div id="stems-area" class="flex-1 overflow-y-auto p-3">
-    <div id="stem-loading" class="flex flex-col items-center justify-center py-10 gap-2">
-      <div class="spinner"></div>
-      <span id="stem-loading-text" class="text-[#86efac] text-sm">Loading…</span>
-    </div>
-    <div id="stem-grid" class="hidden grid gap-2"></div>
-    <p id="stem-hint" class="hidden text-center text-[#86efac] text-xs mt-3 opacity-40">
-      Tap to mute · Long-press to solo
-    </p>
-  </div>
 </div>
 
 </div><!-- /app-container -->
@@ -557,7 +555,6 @@ async function openPlayer(job) {
   $('player-title').textContent = job.title || job.filename || 'Song';
   $('player-artist').textContent = job.artist || '';
   $('stem-grid').classList.add('hidden');
-  $('stem-hint').classList.add('hidden');
   $('stem-loading').classList.remove('hidden');
   $('stem-loading-text').textContent = 'Loading stems…';
   $('progress-fill').style.width = '0%';
@@ -636,7 +633,7 @@ async function loadStems(jobId, stemFiles) {
       btn.style.color = color;
       btn.style.borderColor = color;
       btn.style.backgroundColor = color + '15';
-      btn.innerHTML = `<span style="font-size:1.4rem">${STEM_ICONS[name]||'♪'}</span><span>${name.toUpperCase()}</span>`;
+      btn.innerHTML = `<span style="font-size:1.2rem">${STEM_ICONS[name]||'♪'}</span><span>${name.toUpperCase()}</span>`;
       btn.addEventListener('click', () => toggleStem(name));
       btn.addEventListener('pointerdown', () => { lpTimer = setTimeout(() => soloStem(name), 600); });
       ['pointerup','pointercancel'].forEach(e => btn.addEventListener(e, () => clearTimeout(lpTimer)));
@@ -648,7 +645,6 @@ async function loadStems(jobId, stemFiles) {
 
   $('stem-loading').classList.add('hidden');
   $('stem-grid').classList.remove('hidden');
-  $('stem-hint').classList.remove('hidden');
   $('time-total').textContent = fmtTime(totalDur);
 }
 
@@ -798,23 +794,14 @@ function cycleLyricsMode() {
 function applyLyricsMode() {
   const chordifyPanel = $('lyrics-chordify-panel');
   const spotifyPanel  = $('lyrics-spotify-panel');
-  const stemsArea     = $('stems-area');
-  const stemGrid      = $('stem-grid');
   const toggleBtn     = $('lyrics-toggle-btn');
   const modeLabel     = $('lyrics-mode-label');
 
   chordifyPanel.classList.add('hidden');
   spotifyPanel.classList.add('hidden');
   spotifyPanel.classList.remove('spotify-active');
-  spotifyPanel.style.flex = '';
-  spotifyPanel.style.minHeight = '';
   $('lyrics-spotify-content').style.paddingTop = '';
   $('lyrics-spotify-content').style.paddingBottom = '';
-  stemsArea.className = 'flex-1 overflow-y-auto p-3';
-  stemsArea.style.maxHeight = '';
-  stemsArea.style.paddingBottom = '';
-  stemGrid.style.gridTemplateColumns = '';
-  $('stem-hint').style.display = '';
   toggleBtn.style.color = '';
 
   if (lyricsMode === 'chordify') {
@@ -829,13 +816,6 @@ function applyLyricsMode() {
   } else if (lyricsMode === 'spotify') {
     spotifyPanel.classList.remove('hidden');
     spotifyPanel.classList.add('spotify-active');
-    spotifyPanel.style.flex = '1';
-    spotifyPanel.style.minHeight = '0';  // required: prevents flex child from expanding past bounds
-    stemsArea.className = 'flex-shrink-0 overflow-y-auto p-2 border-t border-[#1e2e1e]';
-    stemsArea.style.maxHeight = '110px';
-    stemsArea.style.paddingBottom = 'max(8px, env(safe-area-inset-bottom))';
-    stemGrid.style.gridTemplateColumns = 'repeat(6, minmax(50px, 1fr))';
-    $('stem-hint').style.display = 'none';
     modeLabel.textContent = 'LYRICS';
     toggleBtn.style.color = '#22c55e';
     renderLyricsSpotify();
@@ -902,11 +882,18 @@ function lyricChordifyClass(idx) {
 function lyricSpotifyClass(idx, activeIdx) {
   // Lines beyond dist 2 collapse to invisible spacers — they still occupy scroll height
   // so scrollIntoView can properly center the active line throughout the song.
-  if (activeIdx < 0) return 'text-center text-xs opacity-0 py-0.5 cursor-pointer';
+  if (activeIdx < 0) {
+    // No lyric active yet — show upcoming lines dimmed so the panel isn't blank
+    const dist = idx; // treat line 0 as the focal point
+    if (dist === 0) return 'text-center text-[#86efac] text-base md:text-2xl opacity-40 py-1.5 md:py-3 cursor-pointer leading-snug';
+    if (dist === 1) return 'text-center text-[#86efac] text-sm md:text-xl opacity-20 py-1 md:py-2 cursor-pointer leading-snug';
+    if (dist === 2) return 'text-center text-[#86efac] text-xs md:text-base opacity-10 py-0.5 md:py-1.5 cursor-pointer leading-snug';
+    return 'text-center text-xs opacity-0 py-0.5 cursor-pointer';
+  }
   const dist = Math.abs(idx - activeIdx);
-  if (dist === 0) return 'text-center text-[#f0fdf4] font-bold text-xl py-3 cursor-pointer leading-snug';
-  if (dist === 1) return 'text-center text-[#86efac] text-base opacity-55 py-1.5 cursor-pointer leading-snug';
-  if (dist === 2) return 'text-center text-[#86efac] text-sm opacity-25 py-1 cursor-pointer leading-snug';
+  if (dist === 0) return 'text-center text-[#f0fdf4] font-bold text-xl md:text-4xl py-3 md:py-5 cursor-pointer leading-snug';
+  if (dist === 1) return 'text-center text-[#86efac] text-base md:text-2xl opacity-55 py-1.5 md:py-3 cursor-pointer leading-snug';
+  if (dist === 2) return 'text-center text-[#86efac] text-sm md:text-xl opacity-25 py-1 md:py-2 cursor-pointer leading-snug';
   return 'text-center text-xs opacity-0 py-0.5 cursor-pointer';
 }
 
