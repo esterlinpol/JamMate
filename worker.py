@@ -99,7 +99,7 @@ def _download_youtube(url: str, dest_dir: Path) -> tuple[Path, str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Duration + Lyrics
+# Duration + Lyrics + BPM
 # ---------------------------------------------------------------------------
 
 def _get_duration(source_path: Path) -> float | None:
@@ -113,6 +113,79 @@ def _get_duration(source_path: Path) -> float | None:
         except (KeyError, ValueError):
             pass
     return None
+
+
+def _detect_bpm(drums_path: Path) -> tuple[float | None, list[float]]:
+    """
+    Detect BPM and beat timestamps using ffmpeg + numpy.
+    Decodes the drums stem to mono 22050 Hz PCM, computes onset strength,
+    finds tempo via autocorrelation, then picks beats.
+    """
+    try:
+        import numpy as np
+
+        SR = 22050
+        HOP = 512  # ~23 ms per frame
+
+        # Decode to raw float32 PCM via ffmpeg
+        r = subprocess.run(
+            ["ffmpeg", "-i", str(drums_path), "-f", "f32le", "-ar", str(SR), "-ac", "1", "pipe:1", "-loglevel", "quiet"],
+            capture_output=True,
+        )
+        if r.returncode != 0 or not r.stdout:
+            return None, []
+
+        audio = np.frombuffer(r.stdout, dtype=np.float32)
+        n_frames = len(audio) // HOP
+
+        # Compute RMS energy per hop frame
+        energy = np.array([
+            np.sqrt(np.mean(audio[i * HOP:(i + 1) * HOP] ** 2))
+            for i in range(n_frames)
+        ])
+
+        # Onset strength: positive first-difference of energy (half-rectified)
+        onset = np.diff(energy, prepend=energy[0])
+        onset = np.maximum(onset, 0)
+
+        # Find dominant period via autocorrelation over BPM range 60–200
+        fps = SR / HOP
+        min_lag = int(fps * 60 / 200)  # 200 BPM
+        max_lag = int(fps * 60 / 60)   # 60 BPM
+
+        if max_lag >= len(onset):
+            return None, []
+
+        # Autocorrelation
+        corr = np.correlate(onset, onset, mode='full')
+        corr = corr[len(corr) // 2:]
+        search = corr[min_lag:max_lag + 1]
+        best_lag = int(np.argmax(search)) + min_lag
+        bpm = fps * 60 / best_lag
+
+        # Generate beat timestamps spaced by best_lag frames
+        # Anchor to the strongest onset in the first 4 bars
+        anchor_end = min(best_lag * 8, len(onset))
+        first_anchor = int(np.argmax(onset[:anchor_end]))
+        beat_frames = []
+        # Walk backward from anchor
+        t = first_anchor
+        while t >= 0:
+            beat_frames.append(t)
+            t -= best_lag
+        # Walk forward from anchor
+        t = first_anchor + best_lag
+        total_frames = len(audio) // HOP
+        while t < total_frames:
+            beat_frames.append(t)
+            t += best_lag
+
+        beat_times = sorted(float(f * HOP / SR) for f in beat_frames if f >= 0)
+        return round(bpm, 1), beat_times
+
+    except Exception as e:
+        print(f"[worker] BPM detection failed: {e}", flush=True)
+        return None, []
 
 
 def _fetch_lrclib(title: str, artist: str, duration: float | None) -> tuple[str | None, str | None]:
@@ -251,7 +324,7 @@ def _process_job(server: str, job: dict, device: str):
             print(f"[worker] uploaded {name}.ogg", flush=True)
 
         # ── Step 4: Extract duration + fetch lyrics ───────────────────────
-        _patch(server, job_id, progress=95, progress_phase="Fetching lyrics…")
+        _patch(server, job_id, progress=90, progress_phase="Fetching lyrics…")
         duration = _get_duration(source_path)
         chord_data, chord_source = _fetch_lrclib(title, artist, duration)
         if chord_data:
@@ -259,13 +332,30 @@ def _process_job(server: str, job: dict, device: str):
         else:
             print("[worker] no lyrics found", flush=True)
 
-        # ── Step 5: Mark done ─────────────────────────────────────────────
+        # ── Step 5: Detect BPM from drums stem ────────────────────────────
+        bpm = None
+        beat_times: list[float] = []
+        drums_ogg = tmp_path / "drums.ogg"
+        if drums_ogg.exists():
+            _patch(server, job_id, progress=95, progress_phase="Detecting tempo…")
+            bpm, beat_times = _detect_bpm(drums_ogg)
+            if bpm:
+                print(f"[worker] BPM detected: {bpm:.1f} ({len(beat_times)} beats)", flush=True)
+            else:
+                print("[worker] BPM detection returned no result", flush=True)
+        else:
+            print("[worker] drums stem not found, skipping BPM detection", flush=True)
+
+        # ── Step 6: Mark done ─────────────────────────────────────────────
         done_patch: dict = {"status": "done", "progress": 100, "progress_phase": "Done"}
         if duration is not None:
             done_patch["duration_sec"] = duration
         if chord_data:
             done_patch["chord_data"] = chord_data
             done_patch["chord_source"] = chord_source
+        if bpm:
+            done_patch["bpm"] = bpm
+            done_patch["beat_times"] = _json.dumps(beat_times)
         _patch(server, job_id, **done_patch)
         print(f"[worker] job {job_id} complete ✓", flush=True)
 

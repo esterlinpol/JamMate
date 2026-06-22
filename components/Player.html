@@ -38,7 +38,59 @@
       </svg>
       <span id="lyrics-mode-label" class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">OFF</span>
     </button>
+    <!-- Detect tempo button (visible for songs without beat data) -->
+    <button id="chord-detect-btn"
+      class="hidden flex flex-col items-center p-2 text-[#86efac] hover:text-[#22c55e] transition-colors"
+      title="Detect song tempo to enable chord editing">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/>
+      </svg>
+      <span id="chord-detect-label" class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">BPM</span>
+    </button>
+    <!-- Chord mode tabs (visible when chord data is loaded) -->
+    <div id="chord-tabs" class="hidden flex gap-0.5 ml-1">
+      <button id="chord-tab-diagrams"
+        class="chord-tab active px-2 py-1 rounded-l-lg text-xs font-semibold border border-[#1e2e1e] transition-all"
+        title="Show chord diagrams">Diagrams</button>
+      <button id="chord-tab-edit"
+        class="chord-tab px-2 py-1 rounded-r-lg text-xs font-semibold border border-[#1e2e1e] transition-all"
+        title="Edit chord timeline">Edit</button>
+    </div>
+    <!-- Diagrams toggle -->
+    <button id="chord-diagrams-btn"
+      class="hidden flex flex-col items-center p-2 text-[#86efac] hover:text-[#22c55e] transition-colors"
+      title="Toggle finger diagrams">
+      <span class="text-base leading-none">≡</span>
+      <span class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">DIAG</span>
+    </button>
   </header>
+
+  <!-- Chord strip + diagram row -->
+  <div id="chord-strip-wrap" class="hidden flex-shrink-0 border-b border-[#1e2e1e] bg-[#0d130d] relative">
+    <!-- Beat grid -->
+    <div id="chord-strip" class="overflow-x-hidden whitespace-nowrap select-none h-[64px] relative"></div>
+    <!-- Diagram row -->
+    <div id="chord-diagram-row"></div>
+    <!-- Edit panel -->
+    <div id="chord-edit-panel" class="hidden border-t border-[#1e2e1e] bg-[#0a0f0a]">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-[#1e2e1e]">
+        <span class="text-xs text-[#86efac] font-semibold uppercase tracking-widest">Chord Timeline</span>
+        <button id="chord-edit-clear" class="text-xs text-[#f87171] hover:text-red-400 transition-colors px-2 py-1">Clear all</button>
+      </div>
+      <div class="flex h-40">
+        <!-- Timeline list -->
+        <div id="chord-edit-list" class="flex-1 overflow-y-auto px-2 py-1 space-y-0.5"></div>
+        <!-- Chord picker from library -->
+        <div class="w-40 border-l border-[#1e2e1e] flex flex-col">
+          <div class="px-2 py-1.5 border-b border-[#1e2e1e]">
+            <input id="chord-edit-search" type="text" placeholder="Search…"
+              class="w-full bg-[#172017] border border-[#1e2e1e] rounded-lg px-2 py-1 text-xs text-[#f0fdf4] placeholder-[#86efac]/40 outline-none"/>
+          </div>
+          <div id="chord-edit-picker" class="flex-1 overflow-y-auto p-1 flex flex-wrap gap-1 content-start"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="lyrics-area" class="flex-1 min-h-0 overflow-hidden relative">
     <div id="lyrics-chordify-panel" class="hidden h-full overflow-y-auto">
@@ -84,6 +136,13 @@
         </button>
       </div>
       <span id="time-total" class="text-[#86efac] text-xs tabular-nums w-9 text-right">0:00</span>
+    </div>
+    <!-- Tempo control (visible when beat data is loaded) -->
+    <div id="tempo-control" class="hidden flex items-center justify-center gap-2 mt-1.5">
+      <button id="tempo-down" class="text-[#86efac] hover:text-[#22c55e] text-sm px-1 transition-colors">◄</button>
+      <span class="text-[0.6rem] text-[#86efac] uppercase tracking-widest">Tempo</span>
+      <span id="tempo-label" class="text-xs font-bold text-[#f0fdf4] w-8 text-center tabular-nums">100%</span>
+      <button id="tempo-up" class="text-[#86efac] hover:text-[#22c55e] text-sm px-1 transition-colors">►</button>
     </div>
   </div>
 

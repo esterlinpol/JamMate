@@ -28,6 +28,7 @@ let totalDur     = 0;
 let rafId        = null;
 let masterVolume = 1.0;
 let prevVolume   = 1.0;
+let _playbackRate = 1.0;
 
 // ── Audio context ─────────────────────────────────────────────────────────────
 
@@ -130,11 +131,12 @@ export function play() {
   Object.values(stemsMap).forEach(s => {
     const src = audioCtx.createBufferSource();
     src.buffer = s.buffer;
+    src.playbackRate.value = _playbackRate;
     src.connect(s.gain);
     src.start(at, offsetSec);
     s.source = src;
   });
-  startTime = at - offsetSec;
+  startTime = at - offsetSec / _playbackRate;
   isPlaying = true;
   $('icon-play').classList.add('hidden');
   $('icon-pause').classList.remove('hidden');
@@ -143,7 +145,7 @@ export function play() {
 
 export function pauseAll() {
   if (!isPlaying) return;
-  offsetSec = audioCtx.currentTime - startTime;
+  offsetSec = (audioCtx.currentTime - startTime) * _playbackRate;
   Object.values(stemsMap).forEach(s => { try { s.source?.stop(0); } catch (e) {} s.source = null; });
   isPlaying = false;
   cancelAnimationFrame(rafId);
@@ -186,10 +188,11 @@ export function doSeek(t) {
 
 function tick() {
   if (!isPlaying) return;
-  const elapsed = audioCtx.currentTime - startTime;
+  const elapsed = (audioCtx.currentTime - startTime) * _playbackRate;
   if (elapsed >= totalDur) { pauseAll(); offsetSec = 0; return; }
   updateUI(elapsed);
   updateLyricIdx(elapsed);
+  if (window._tickChordPlay) window._tickChordPlay(elapsed);
   rafId = requestAnimationFrame(tick);
 }
 
@@ -243,3 +246,18 @@ document.addEventListener('fullscreenchange', () => {
   $('fs-icon-exit').classList.toggle('hidden', !inFs);
   $('fs-label').textContent = inFs ? 'EXIT' : 'FULL';
 });
+
+// ── Playback rate (tempo) ─────────────────────────────────────────────────────
+
+export function setPlaybackRate(rate) {
+  _playbackRate = Math.max(0.5, Math.min(1.5, rate));
+  if (isPlaying) {
+    // restart with new rate from current position
+    const was = isPlaying;
+    pauseAll();
+    if (was) play();
+  }
+}
+
+// Expose seekTo globally so chord-play.js can call it without circular imports
+window.seekTo = doSeek;

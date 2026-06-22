@@ -84,6 +84,16 @@ class JobPatch(BaseModel):
     error_msg: Optional[str] = None
     title: Optional[str] = None
     artist: Optional[str] = None
+    song_chord_data: Optional[str] = None
+    bpm: Optional[float] = None
+    beat_times: Optional[str] = None
+
+
+class ChordCreate(BaseModel):
+    name: str
+    frets: str
+    fingers: str
+    barre: Optional[str] = None
 
 
 class SettingsPatch(BaseModel):
@@ -158,7 +168,7 @@ async def delete_job(job_id: str):
 async def get_stems(job_id: str):
     with db() as conn:
         row = conn.execute(
-            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec FROM jobs WHERE id = ?",
+            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec, song_chord_data, bpm, beat_times FROM jobs WHERE id = ?",
             (job_id,)
         ).fetchone()
     if not row:
@@ -179,6 +189,9 @@ async def get_stems(job_id: str):
         "chord_source_url": row["chord_source_url"],
         "capo": row["capo"] or 0,
         "duration_sec": row["duration_sec"],
+        "song_chord_data": row["song_chord_data"],
+        "bpm": row["bpm"],
+        "beat_times": row["beat_times"],
     }
 
 
@@ -320,6 +333,106 @@ async def add_youtube(
         )
 
     return {"job_id": job_id}
+
+
+# ── Chord Library ────────────────────────────────────────────────────────────
+
+@router.get("/api/chords")
+async def list_chords():
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM chords ORDER BY name ASC").fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.post("/api/chords")
+async def create_chord(chord: ChordCreate):
+    chord_id = str(uuid.uuid4())
+    now = time.time()
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO chords (id, name, frets, fingers, barre, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (chord_id, chord.name.strip(), chord.frets, chord.fingers, chord.barre, now, now),
+        )
+    return {"id": chord_id}
+
+
+@router.get("/api/chords/{chord_id}")
+async def get_chord(chord_id: str):
+    with db() as conn:
+        row = conn.execute("SELECT * FROM chords WHERE id = ?", (chord_id,)).fetchone()
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return dict(row)
+
+
+@router.put("/api/chords/{chord_id}")
+async def update_chord(chord_id: str, chord: ChordCreate):
+    now = time.time()
+    with db() as conn:
+        conn.execute(
+            "UPDATE chords SET name = ?, frets = ?, fingers = ?, barre = ?, updated_at = ? WHERE id = ?",
+            (chord.name.strip(), chord.frets, chord.fingers, chord.barre, now, chord_id),
+        )
+    return {"ok": True}
+
+
+@router.post("/api/jobs/{job_id}/detect-bpm")
+async def detect_bpm(job_id: str):
+    import json as _json
+    import subprocess as _sp
+    drums_path = SEPARATED_DIR / job_id / "drums.ogg"
+    if not drums_path.exists():
+        return JSONResponse({"error": "drums stem not found"}, status_code=404)
+    try:
+        import numpy as np
+        SR, HOP = 22050, 512
+        r = _sp.run(
+            ["ffmpeg", "-i", str(drums_path), "-f", "f32le", "-ar", str(SR), "-ac", "1", "pipe:1", "-loglevel", "quiet"],
+            capture_output=True,
+        )
+        if r.returncode != 0 or not r.stdout:
+            return JSONResponse({"error": "ffmpeg decode failed"}, status_code=500)
+        audio = np.frombuffer(r.stdout, dtype=np.float32)
+        n_frames = len(audio) // HOP
+        energy = np.array([np.sqrt(np.mean(audio[i*HOP:(i+1)*HOP]**2)) for i in range(n_frames)])
+        onset = np.maximum(np.diff(energy, prepend=energy[0]), 0)
+        fps = SR / HOP
+        min_lag, max_lag = int(fps * 60 / 200), int(fps * 60 / 60)
+        if max_lag >= len(onset):
+            return JSONResponse({"error": "audio too short"}, status_code=422)
+        corr = np.correlate(onset, onset, mode='full')[len(onset)-1:]
+        best_lag = int(np.argmax(corr[min_lag:max_lag+1])) + min_lag
+        bpm = round(fps * 60 / best_lag, 1)
+        anchor = int(np.argmax(onset[:min(best_lag*8, len(onset))]))
+        frames = []
+        t = anchor
+        while t >= 0:
+            frames.append(t); t -= best_lag
+        t = anchor + best_lag
+        while t < n_frames:
+            frames.append(t); t += best_lag
+        beat_times = sorted(float(f * HOP / SR) for f in frames if f >= 0)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    if bpm <= 0:
+        return JSONResponse({"error": "could not detect tempo"}, status_code=422)
+    now = time.time()
+    with db() as conn:
+        conn.execute(
+            "UPDATE jobs SET bpm = ?, beat_times = ?, updated_at = ? WHERE id = ?",
+            (bpm, _json.dumps(beat_times), now, job_id),
+        )
+    return {"bpm": bpm, "beat_count": len(beat_times), "beat_times": beat_times}
+
+
+@router.delete("/api/chords/{chord_id}")
+async def delete_chord(chord_id: str):
+    with db() as conn:
+        row = conn.execute("SELECT id FROM chords WHERE id = ?", (chord_id,)).fetchone()
+        if not row:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        conn.execute("DELETE FROM chords WHERE id = ?", (chord_id,))
+    return {"ok": True}
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────

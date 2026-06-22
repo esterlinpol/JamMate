@@ -84,9 +84,9 @@ function applyLyricsMode() {
     modeLabel.textContent = 'LYRICS';
     toggleBtn.style.color = '#22c55e';
     renderLyricsSpotify();
-    const halfH = Math.round(spotifyPanel.offsetHeight / 2);
-    $('lyrics-spotify-content').style.paddingTop    = `${halfH}px`;
-    $('lyrics-spotify-content').style.paddingBottom = `${halfH}px`;
+    const padH = Math.round(spotifyPanel.offsetHeight * 0.3);
+    $('lyrics-spotify-content').style.paddingTop    = `${padH}px`;
+    $('lyrics-spotify-content').style.paddingBottom = `${padH}px`;
     setTimeout(() => {
       const idx = currentLyricIdx >= 0 ? currentLyricIdx : 0;
       const el  = $(`lyric-s-${idx}`);

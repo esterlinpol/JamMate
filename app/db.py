@@ -1,5 +1,7 @@
+import json
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -59,6 +61,16 @@ def init_db():
                 value TEXT NOT NULL DEFAULT ''
             );
 
+            CREATE TABLE IF NOT EXISTS chords (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                frets TEXT NOT NULL,
+                fingers TEXT NOT NULL,
+                barre TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('worker_device', 'cpu'),
                 ('worker_last_seen', '');
@@ -71,3 +83,49 @@ def init_db():
             conn.execute("ALTER TABLE jobs ADD COLUMN capo INTEGER NOT NULL DEFAULT 0")
         if "duration_sec" not in existing:
             conn.execute("ALTER TABLE jobs ADD COLUMN duration_sec REAL")
+        for col, ddl in [
+            ("song_chord_data", "TEXT"),
+            ("bpm", "REAL"),
+            ("beat_times", "TEXT"),
+        ]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
+
+        _seed_chords(conn)
+
+
+_DEFAULT_CHORDS = [
+    # name,  frets,                  fingers,              barre
+    ("Em",   [0,2,2,0,0,0],          [0,2,3,0,0,0],        None),
+    ("Am",   [-1,0,2,2,1,0],         [0,0,2,3,1,0],        None),
+    ("E",    [0,2,2,1,0,0],          [0,2,3,1,0,0],        None),
+    ("A",    [-1,0,2,2,2,0],         [0,0,1,2,3,0],        None),
+    ("D",    [-1,-1,0,2,3,2],        [0,0,0,1,3,2],        None),
+    ("Dm",   [-1,-1,0,2,3,1],        [0,0,0,2,3,1],        None),
+    ("G",    [3,2,0,0,0,3],          [2,1,0,0,0,3],        None),
+    ("C",    [-1,3,2,0,1,0],         [0,3,2,0,1,0],        None),
+    ("F",    [1,3,3,2,1,1],          [1,3,4,2,1,1],        {"fret":1,"from":0,"to":5}),
+    ("Bm",   [-1,2,4,4,3,2],         [0,1,3,4,2,1],        {"fret":2,"from":1,"to":5}),
+    ("E7",   [0,2,0,1,0,0],          [0,2,0,1,0,0],        None),
+    ("A7",   [-1,0,2,0,2,0],         [0,0,2,0,3,0],        None),
+    ("D7",   [-1,-1,0,2,1,2],        [0,0,0,2,1,3],        None),
+    ("B7",   [-1,2,1,2,0,2],         [0,2,1,3,0,4],        None),
+]
+
+
+def _seed_chords(conn: sqlite3.Connection) -> None:
+    now = time.time()
+    for name, frets, fingers, barre in _DEFAULT_CHORDS:
+        conn.execute(
+            """INSERT OR IGNORE INTO chords (id, name, frets, fingers, barre, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(uuid.uuid4()),
+                name,
+                json.dumps(frets),
+                json.dumps(fingers),
+                json.dumps(barre) if barre else None,
+                now,
+                now,
+            ),
+        )

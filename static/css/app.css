@@ -67,3 +67,229 @@ button:active { transform: scale(0.96); }
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
   mask-image:         linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
 }
+
+/* ── Chord views ───────────────────────────────────────────────────────────── */
+
+@media (orientation: portrait) {
+  #chord-library-view { display: flex; flex-direction: column; height: 100svh; }
+}
+@media (orientation: landscape) {
+  #chord-library-view { display: flex; flex-direction: column; height: 100dvh; }
+}
+
+/* ── Beat strip ────────────────────────────────────────────────────────────── */
+
+#chord-strip {
+  display: flex;
+  align-items: stretch;
+  overflow-x: hidden;
+  scroll-behavior: auto;
+  position: relative;
+}
+
+.beat-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 52px;
+  height: 64px;
+  padding: 4px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #86efac;
+  background: #0d130d;
+  border-right: 1px solid #1e2e1e;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.beat-box.active {
+  background: #14532d;
+  border-left: 2px solid #22c55e;
+  border-right: 1px solid #22c55e;
+  color: #f0fdf4;
+}
+
+.beat-box.past   { opacity: 0.35; }
+.beat-box.future { opacity: 0.75; }
+
+#chord-strip[data-editing] .beat-box:hover {
+  background: #1e2e1e;
+  border-color: #22c55e;
+}
+
+/* ── Chord diagram row ─────────────────────────────────────────────────────── */
+
+#chord-diagram-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  padding: 10px 12px;
+  gap: 10px;
+  max-height: 260px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.chord-diagram-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 4px;
+  border-radius: 10px;
+  border: 1px solid #1e2e1e;
+  background: #111811;
+  cursor: pointer;
+  transition: border-color 0.2s, opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.chord-diagram-card:hover { border-color: #22c55e; }
+
+.chord-diagram-card.current {
+  border-color: #22c55e;
+  background: #172017;
+  box-shadow: 0 0 0 1px rgba(34,197,94,0.3), 0 4px 16px rgba(34,197,94,0.15);
+}
+
+.chord-diagram-card.past     { opacity: 0.45; }
+.chord-diagram-card.upcoming { opacity: 0.8; }
+
+.chord-diagram-card span {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #f0fdf4;
+  text-align: center;
+}
+
+.chord-diagram-card.current span {
+  font-size: 0.85rem;
+  color: #22c55e;
+}
+
+.chord-diagram-placeholder {
+  width: 90px; height: 110px;
+  display: flex; align-items: center; justify-content: center;
+  color: #1e2e1e; font-size: 1.5rem;
+}
+
+/* ── Chord tabs ────────────────────────────────────────────────────────────── */
+
+.chord-tab {
+  background: #172017;
+  color: #86efac;
+  transition: background 0.15s, color 0.15s;
+}
+.chord-tab.active {
+  background: #22c55e;
+  color: #0a0f0a;
+  border-color: #22c55e;
+}
+
+/* ── Chord edit panel ──────────────────────────────────────────────────────── */
+
+.chord-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+.chord-edit-row:hover { background: #172017; }
+
+.chord-edit-time {
+  font-size: 0.6rem;
+  font-family: monospace;
+  color: #86efac;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.chord-edit-time:hover { color: #22c55e; }
+
+.chord-edit-name {
+  flex: 1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #f0fdf4;
+}
+
+.chord-edit-del {
+  font-size: 0.6rem;
+  color: #f87171;
+  opacity: 0.5;
+  padding: 2px 4px;
+  transition: opacity 0.15s;
+}
+.chord-edit-del:hover { opacity: 1; }
+
+/* ── Chord picker popup ────────────────────────────────────────────────────── */
+
+#chord-picker-popup {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #111811;
+  border: 1px solid #22c55e;
+  border-radius: 12px;
+  padding: 8px;
+  z-index: 100;
+  min-width: 200px;
+  max-width: 90%;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+}
+
+.chord-picker-input {
+  width: 100%;
+  background: #172017;
+  border: 1px solid #1e2e1e;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  color: #f0fdf4;
+  outline: none;
+  margin-bottom: 6px;
+}
+.chord-picker-input:focus { border-color: #22c55e; }
+
+.chord-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.chord-picker-chip {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #172017;
+  border: 1px solid #1e2e1e;
+  color: #f0fdf4;
+  font-size: 0.65rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+.chord-picker-chip:hover { border-color: #22c55e; background: #1e2e1e; }
+
+.chord-picker-cancel {
+  position: absolute;
+  top: 6px; right: 8px;
+  font-size: 0.75rem;
+  color: #86efac;
+  opacity: 0.5;
+  padding: 2px 4px;
+  transition: opacity 0.1s;
+}
+.chord-picker-cancel:hover { opacity: 1; }

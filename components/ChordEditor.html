@@ -1,0 +1,90 @@
+<div id="chord-editor-backdrop" class="hidden"></div>
+
+<div id="chord-editor-panel"
+  class="hidden fixed top-0 bottom-0 bg-[#0a0f0a] z-50 flex flex-col"
+  style="left: max(0px, calc(50% - 512px)); right: max(0px, calc(50% - 512px)); padding-bottom: env(safe-area-inset-bottom)">
+
+  <!-- Header -->
+  <header class="flex items-center gap-2 px-4 py-3 border-b border-[#1e2e1e] flex-shrink-0">
+    <button id="chord-editor-cancel" class="p-2 text-[#86efac] hover:text-[#22c55e] -ml-1">
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </button>
+    <span id="chord-editor-title" class="flex-1 font-bold text-[#f0fdf4]">New Chord</span>
+    <button id="chord-editor-delete"
+      class="hidden text-xs text-[#f87171] hover:text-red-400 border border-[#f87171]/30 hover:border-[#f87171] px-3 py-1.5 rounded-xl transition-all">
+      Delete
+    </button>
+  </header>
+
+  <!-- Two-column body -->
+  <div class="flex-1 min-h-0 overflow-y-auto">
+    <div class="h-full p-4 grid grid-cols-1 md:grid-cols-2 gap-6 md:items-stretch">
+
+      <!-- Left column: Name + Fretboard -->
+      <div class="flex flex-col gap-5">
+
+        <div>
+          <label class="text-xs text-[#86efac] uppercase tracking-widest mb-1.5 block">Chord Name</label>
+          <input id="chord-editor-name" type="text" placeholder="e.g. Am, G, Cmaj7, F#"
+            class="w-full bg-[#172017] border border-[#1e2e1e] focus:border-[#22c55e] rounded-xl px-3 py-2.5 text-[#f0fdf4] text-base outline-none transition-colors placeholder-[#86efac]/30"/>
+        </div>
+
+        <div>
+          <label class="text-xs text-[#86efac] uppercase tracking-widest mb-1 block">Fretboard</label>
+          <p class="text-xs text-[#86efac]/40 mb-3">Tap a fret to place · tap dot to cycle finger · tap ○ / ✕ to toggle string</p>
+          <div id="chord-editor-fretboard" class="w-full" style="touch-action: none"></div>
+        </div>
+
+      </div>
+
+      <!-- Right column: Barre + Preview (fills remaining height) -->
+      <div class="flex flex-col gap-5 md:h-full">
+
+        <div>
+          <label class="text-xs text-[#86efac] uppercase tracking-widest mb-2 block">Barre / Cejilla</label>
+          <div class="bg-[#172017] rounded-xl p-4 border border-[#1e2e1e]">
+            <label class="flex items-center gap-2 text-sm text-[#f0fdf4] mb-3 cursor-pointer">
+              <input id="chord-editor-barre-on" type="checkbox" class="accent-[#22c55e] w-4 h-4"/>
+              Enable barre
+            </label>
+            <div id="chord-editor-barre-opts" class="hidden grid grid-cols-3 gap-3">
+              <div>
+                <p class="text-xs text-[#86efac] mb-1.5">Fret</p>
+                <input id="chord-editor-barre-fret" type="number" min="1" max="12" value="1"
+                  class="w-full bg-[#111811] border border-[#1e2e1e] focus:border-[#22c55e] rounded-lg px-2 py-2 text-sm text-[#f0fdf4] outline-none text-center transition-colors"/>
+              </div>
+              <div>
+                <p class="text-xs text-[#86efac] mb-1.5">From string</p>
+                <input id="chord-editor-barre-from" type="number" min="0" max="5" value="0"
+                  class="w-full bg-[#111811] border border-[#1e2e1e] focus:border-[#22c55e] rounded-lg px-2 py-2 text-sm text-[#f0fdf4] outline-none text-center transition-colors"/>
+              </div>
+              <div>
+                <p class="text-xs text-[#86efac] mb-1.5">To string</p>
+                <input id="chord-editor-barre-to" type="number" min="0" max="5" value="5"
+                  class="w-full bg-[#111811] border border-[#1e2e1e] focus:border-[#22c55e] rounded-lg px-2 py-2 text-sm text-[#f0fdf4] outline-none text-center transition-colors"/>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Preview expands to fill remaining column height -->
+        <div class="flex flex-col flex-1 min-h-0">
+          <label class="text-xs text-[#86efac] uppercase tracking-widest mb-2 block">Preview</label>
+          <div id="chord-editor-preview" class="flex-1 flex items-center justify-center bg-[#172017] rounded-xl border border-[#1e2e1e]"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer Save — always at the bottom -->
+  <div class="px-4 py-3 border-t border-[#1e2e1e] flex-shrink-0">
+    <button id="chord-editor-save"
+      class="w-full py-3 rounded-xl bg-[#22c55e] text-[#0a0f0a] text-sm font-bold hover:bg-[#16a34a] transition-all">
+      Save Chord
+    </button>
+  </div>
+
+</div>
