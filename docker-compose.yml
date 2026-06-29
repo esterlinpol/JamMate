@@ -1,0 +1,11 @@
+services:
+  jammate:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - jammate-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  jammate-data:
