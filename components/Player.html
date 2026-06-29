@@ -1,4 +1,4 @@
-<div id="player-view" class="bg-[#0a0f0a]" style="display:none">
+<div id="player-view" class="bg-[#0a0f0a] relative" style="display:none">
 
   <header class="flex items-center gap-2 px-3 py-3 border-b border-[#1e2e1e] flex-shrink-0">
     <button id="btn-back" class="p-2 text-[#86efac] hover:text-[#22c55e] -ml-1">
@@ -8,60 +8,27 @@
     </button>
     <div class="flex-1 min-w-0">
       <div id="player-title" class="font-bold text-[#f0fdf4] truncate leading-tight"></div>
-      <div id="player-artist" class="text-[#86efac] text-xs truncate opacity-70"></div>
+      <div class="flex items-center gap-2">
+        <div id="player-artist" class="text-[#86efac] text-xs truncate opacity-70"></div>
+        <span id="player-bpm" class="hidden text-[10px] font-bold tabular-nums text-[#4ade80]/70 border border-[#4ade80]/20 rounded px-1 leading-4 flex-shrink-0">— BPM</span>
+      </div>
     </div>
-    <button id="vol-btn"
-      class="flex flex-col items-center p-2 text-[#86efac] hover:text-[#22c55e] transition-colors"
-      title="Mute/Unmute (M) · ↑↓ to adjust">
-      <svg id="vol-icon-on" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"/>
-      </svg>
-      <svg id="vol-icon-off" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"/>
-      </svg>
-      <span id="vol-label" class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">100%</span>
-    </button>
-    <button id="btn-fullscreen"
-      class="flex flex-col items-center p-2 text-[#86efac] hover:text-[#22c55e] transition-colors" title="Fullscreen (F)">
+    <button id="btn-fullscreen" class="p-2 text-[#86efac] hover:text-[#22c55e] transition-colors" title="Fullscreen (F)">
       <svg id="fs-icon-enter" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15"/>
       </svg>
       <svg id="fs-icon-exit" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25"/>
       </svg>
-      <span id="fs-label" class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">FULL</span>
+      <span id="fs-label" class="sr-only">Fullscreen</span>
     </button>
-    <button id="lyrics-toggle-btn"
-      class="hidden flex flex-col items-center p-2 transition-colors" title="Toggle lyrics (L)">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h10M4 18h14"/>
+    <button id="btn-player-actions"
+      class="flex flex-col items-center p-2 text-[#86efac] hover:text-[#22c55e] transition-colors"
+      title="More options">
+      <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
       </svg>
-      <span id="lyrics-mode-label" class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">OFF</span>
-    </button>
-    <!-- Detect tempo button (visible for songs without beat data) -->
-    <button id="chord-detect-btn"
-      class="hidden flex flex-col items-center p-2 text-[#86efac] hover:text-[#22c55e] transition-colors"
-      title="Detect song tempo to enable chord editing">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/>
-      </svg>
-      <span id="chord-detect-label" class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">BPM</span>
-    </button>
-    <!-- Chord mode tabs (visible when chord data is loaded) -->
-    <div id="chord-tabs" class="hidden flex gap-0.5 ml-1">
-      <button id="chord-tab-diagrams"
-        class="chord-tab active px-2 py-1 rounded-l-lg text-xs font-semibold border border-[#1e2e1e] transition-all"
-        title="Show chord diagrams">Diagrams</button>
-      <button id="chord-tab-edit"
-        class="chord-tab px-2 py-1 rounded-r-lg text-xs font-semibold border border-[#1e2e1e] transition-all"
-        title="Edit chord timeline">Edit</button>
-    </div>
-    <!-- Diagrams toggle -->
-    <button id="chord-diagrams-btn"
-      class="hidden flex flex-col items-center p-2 text-[#86efac] hover:text-[#22c55e] transition-colors"
-      title="Toggle finger diagrams">
-      <span class="text-base leading-none">≡</span>
-      <span class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">DIAG</span>
+      <span class="text-[0.5rem] font-bold tracking-widest mt-0.5 leading-none">MORE</span>
     </button>
   </header>
 
@@ -73,9 +40,41 @@
     <div id="chord-diagram-row"></div>
     <!-- Edit panel -->
     <div id="chord-edit-panel" class="hidden border-t border-[#1e2e1e] bg-[#0a0f0a]">
-      <div class="flex items-center justify-between px-3 py-2 border-b border-[#1e2e1e]">
-        <span class="text-xs text-[#86efac] font-semibold uppercase tracking-widest">Chord Timeline</span>
-        <button id="chord-edit-clear" class="text-xs text-[#f87171] hover:text-red-400 transition-colors px-2 py-1">Clear all</button>
+      <div class="border-b border-[#1e2e1e]">
+        <!-- Row 1: label + action buttons -->
+        <div class="flex items-center justify-between px-3 py-1.5">
+          <span class="text-xs text-[#86efac] font-semibold uppercase tracking-widest">Chord Timeline</span>
+          <div class="flex items-center gap-0.5">
+            <button id="chord-edit-import" class="text-xs text-[#86efac] hover:text-green-300 transition-colors px-2 py-1">Import…</button>
+            <button id="chord-sheet-open-btn" class="text-xs text-[#86efac] hover:text-green-300 transition-colors px-2 py-1">Sheet…</button>
+            <button id="chord-edit-clear" class="text-xs text-[#f87171] hover:text-red-400 transition-colors px-2 py-1">Clear all</button>
+          </div>
+        </div>
+        <!-- Row 2: alignment controls (scrollable if needed) -->
+        <div class="flex items-center gap-2 px-3 pb-2 overflow-x-auto">
+          <!-- Bar 1 beat selector -->
+          <div class="flex items-center gap-0.5 border border-[#1e2e1e] rounded-lg px-1.5 py-0.5 flex-shrink-0" title="Which beat position is bar 1 beat 1?">
+            <span class="text-[10px] text-[#86efac]/50 mr-0.5">Bar 1:</span>
+            <button class="bar-offset-btn" data-offset="0">1</button>
+            <button class="bar-offset-btn" data-offset="1">2</button>
+            <button class="bar-offset-btn" data-offset="2">3</button>
+            <button class="bar-offset-btn" data-offset="3">4</button>
+          </div>
+          <!-- Beat-phase nudge -->
+          <div class="flex items-center gap-0.5 border border-[#1e2e1e] rounded-lg px-1.5 py-0.5 flex-shrink-0" title="Nudge beat grid phase">
+            <button id="beat-nudge-beat-back" class="text-[#86efac] hover:text-white text-xs px-1 leading-none" title="Shift back 1 beat">⏮</button>
+            <button id="beat-nudge-back"      class="text-[#86efac] hover:text-white text-sm px-1 leading-none" title="Shift back 25ms">◀</button>
+            <span id="beat-offset-label" class="text-[10px] text-[#86efac]/60 tabular-nums w-12 text-center">+0.000s</span>
+            <button id="beat-nudge-fwd"       class="text-[#86efac] hover:text-white text-sm px-1 leading-none" title="Shift forward 25ms">▶</button>
+            <button id="beat-nudge-beat-fwd"  class="text-[#86efac] hover:text-white text-xs px-1 leading-none" title="Shift forward 1 beat">⏭</button>
+          </div>
+          <!-- BPM fine-tune -->
+          <div class="flex items-center gap-0.5 border border-[#1e2e1e] rounded-lg px-1.5 py-0.5 flex-shrink-0" title="Fine-tune BPM to align beat grid with audio">
+            <button id="bpm-nudge-down" class="text-[#86efac] hover:text-white text-sm px-1 leading-none" title="−0.1 BPM">−</button>
+            <span id="bpm-fine-label" class="text-[10px] text-[#86efac]/60 tabular-nums w-10 text-center">— BPM</span>
+            <button id="bpm-nudge-up"   class="text-[#86efac] hover:text-white text-sm px-1 leading-none" title="+0.1 BPM">+</button>
+          </div>
+        </div>
       </div>
       <div class="flex h-40">
         <!-- Timeline list -->
@@ -88,6 +87,25 @@
           </div>
           <div id="chord-edit-picker" class="flex-1 overflow-y-auto p-1 flex flex-wrap gap-1 content-start"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- Bulk chord import modal -->
+    <div id="chord-import-modal" class="hidden absolute inset-0 bg-[#0a0f0a]/95 z-20 flex flex-col p-3 gap-2">
+      <div class="flex items-center justify-between">
+        <span class="text-xs text-[#86efac] font-semibold uppercase tracking-widest">Bulk Import — one chord per beat</span>
+        <button id="chord-import-close" class="text-[#86efac] hover:text-white text-lg leading-none">✕</button>
+      </div>
+      <p class="text-[10px] text-[#86efac]/60 leading-snug">
+        One token per beat. <code class="text-[#86efac]">.</code> holds the previous chord · <code class="text-[#86efac]">-</code> no chord · <code class="text-[#86efac]">|</code> snaps to the next bar boundary (skips leftover beats).
+      </p>
+      <textarea id="chord-import-text"
+        class="flex-1 bg-[#172017] border border-[#1e2e1e] rounded-lg px-3 py-2 text-xs text-[#f0fdf4] font-mono placeholder-[#86efac]/30 outline-none resize-none"
+        placeholder="Em7 . D . | C . Em7 . | Am7 . . .
+Em7 . . . | D . . . | C . G/B . | Am7 . B7 ."></textarea>
+      <div class="flex justify-end gap-2">
+        <button id="chord-import-cancel" class="text-xs text-[#86efac]/60 hover:text-[#86efac] px-3 py-1.5">Cancel</button>
+        <button id="chord-import-apply" class="text-xs bg-[#22c55e] hover:bg-[#16a34a] text-black font-semibold rounded-lg px-4 py-1.5 transition-colors">Apply</button>
       </div>
     </div>
   </div>
@@ -106,7 +124,7 @@
       <div class="spinner"></div>
       <span id="stem-loading-text" class="text-[#86efac] text-sm">Loading…</span>
     </div>
-    <div id="stem-grid" class="hidden grid gap-1.5" style="grid-template-columns: repeat(6, 1fr)"></div>
+    <div id="stem-grid" class="hidden grid gap-1.5 grid-cols-3 sm:grid-cols-6"></div>
   </div>
 
   <div class="flex-shrink-0 px-4 py-3 bg-[#0a0f0a] border-t border-[#1e2e1e]"
@@ -137,12 +155,106 @@
       </div>
       <span id="time-total" class="text-[#86efac] text-xs tabular-nums w-9 text-right">0:00</span>
     </div>
-    <!-- Tempo control (visible when beat data is loaded) -->
-    <div id="tempo-control" class="hidden flex items-center justify-center gap-2 mt-1.5">
-      <button id="tempo-down" class="text-[#86efac] hover:text-[#22c55e] text-sm px-1 transition-colors">◄</button>
-      <span class="text-[0.6rem] text-[#86efac] uppercase tracking-widest">Tempo</span>
-      <span id="tempo-label" class="text-xs font-bold text-[#f0fdf4] w-8 text-center tabular-nums">100%</span>
-      <button id="tempo-up" class="text-[#86efac] hover:text-[#22c55e] text-sm px-1 transition-colors">►</button>
+
+  </div>
+
+  <!-- Ghost elements: chords.js reads/writes these for state tracking -->
+  <span id="lyrics-toggle-btn" style="display:none"></span>
+  <span id="lyrics-mode-label" style="display:none"></span>
+
+  <!-- Player Actions Sheet -->
+  <div id="player-actions-backdrop" class="hidden fixed inset-0 bg-black/60 z-40 backdrop-blur-sm"></div>
+  <div id="player-actions-sheet" class="hidden fixed bottom-0 bg-[#111811] rounded-t-2xl border-t border-[#1e2e1e] z-50"
+    style="left: max(0px, calc(50% - 512px)); right: max(0px, calc(50% - 512px));">
+    <!-- Handle -->
+    <div class="flex justify-center pt-3 pb-2">
+      <div class="w-10 h-1 rounded-full bg-[#1e2e1e]"></div>
+    </div>
+    <!-- Volume -->
+    <div class="px-5 py-3 border-b border-[#1e2e1e]">
+      <div class="flex items-center gap-3">
+        <button id="vol-btn" class="text-[#86efac] hover:text-[#22c55e] transition-colors flex-shrink-0" title="Mute/Unmute (M)">
+          <svg id="vol-icon-on" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"/>
+          </svg>
+          <svg id="vol-icon-off" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"/>
+          </svg>
+        </button>
+        <input type="range" id="vol-slider" min="0" max="100" value="100" class="actions-slider flex-1">
+        <span id="vol-label" class="text-xs font-bold tabular-nums text-[#86efac]/70 w-8 text-right flex-shrink-0">100%</span>
+      </div>
+    </div>
+    <!-- Tempo (shown when beats loaded) -->
+    <div id="tempo-section" class="hidden px-5 py-3 border-b border-[#1e2e1e]">
+      <div class="flex items-center gap-3">
+        <svg class="w-5 h-5 text-[#86efac] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+        </svg>
+        <input type="range" id="tempo-slider" min="50" max="150" value="100" class="actions-slider flex-1">
+        <span id="tempo-label" class="text-xs font-bold tabular-nums text-[#86efac]/70 w-8 text-right flex-shrink-0">100%</span>
+      </div>
+    </div>
+    <!-- Quick Action Tiles (shown when song loaded) -->
+    <div id="actions-tile-section" class="hidden px-4 py-3 border-b border-[#1e2e1e]">
+      <div class="flex gap-2">
+        <button id="chord-strip-toggle" class="hidden actions-tile flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl bg-[#0d130d] border border-[#1e2e1e] text-[#86efac] transition-all">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/>
+          </svg>
+          <span class="text-[0.55rem] font-bold tracking-wide uppercase">Chords</span>
+        </button>
+        <button id="chord-diagrams-btn" class="hidden actions-tile flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl bg-[#0d130d] border border-[#1e2e1e] text-[#86efac] transition-all">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 01-.99-3.467l2.31-.66A2.25 2.25 0 009 15.553z"/>
+          </svg>
+          <span class="text-[0.55rem] font-bold tracking-wide uppercase">Diagrams</span>
+        </button>
+        <button id="chord-detect-btn" class="hidden actions-tile flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl bg-[#0d130d] border border-[#1e2e1e] text-[#86efac] transition-all">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/>
+          </svg>
+          <span id="chord-detect-label" class="text-[0.55rem] font-bold tracking-wide uppercase">BPM</span>
+        </button>
+      </div>
+    </div>
+    <!-- Lyrics section (shown when lyrics available) -->
+    <div id="lyrics-section" class="hidden px-5 py-3 border-b border-[#1e2e1e]">
+      <span class="text-[10px] text-[#86efac]/50 uppercase tracking-widest font-semibold">Lyrics</span>
+      <div class="flex gap-2 mt-2">
+        <button id="lyrics-pill-off"      class="flex-1 py-2 rounded-xl text-xs font-semibold border border-[#1e2e1e] text-[#86efac] transition-all">Off</button>
+        <button id="lyrics-pill-chordify" class="flex-1 py-2 rounded-xl text-xs font-semibold border border-[#1e2e1e] text-[#86efac] transition-all">Chords</button>
+        <button id="lyrics-pill-spotify"  class="flex-1 py-2 rounded-xl text-xs font-semibold border border-[#1e2e1e] text-[#86efac] transition-all">Spotify</button>
+      </div>
+    </div>
+    <!-- Chord View tabs (shown when chord strip is visible) -->
+    <div id="chord-tabs-section" class="hidden px-5 py-3">
+      <span class="text-[10px] text-[#86efac]/50 uppercase tracking-widest font-semibold">Chord View</span>
+      <div id="chord-tabs" class="flex gap-0.5 mt-2">
+        <button id="chord-tab-diagrams" class="chord-tab active flex-1 py-2 rounded-l-xl text-xs font-semibold border border-[#1e2e1e] transition-all" title="Show chord diagrams">Diagrams</button>
+        <button id="chord-tab-edit"     class="chord-tab flex-1 py-2 rounded-r-xl text-xs font-semibold border border-[#1e2e1e] transition-all" title="Edit chord timeline">Edit</button>
+      </div>
+    </div>
+    <!-- Safe area -->
+    <div style="height: max(24px, env(safe-area-inset-bottom))"></div>
+  </div>
+
+  <!-- Chord sheet paste modal -->
+  <div id="chord-sheet-modal" class="hidden absolute inset-0 bg-[#0a0f0a]/95 z-30 flex flex-col p-4 gap-3">
+    <div class="flex items-center justify-between">
+      <span class="text-xs text-[#86efac] font-semibold uppercase tracking-widest">Chord Sheet</span>
+      <button id="chord-sheet-close" class="text-[#86efac] hover:text-white text-lg leading-none">✕</button>
+    </div>
+    <p class="text-[10px] text-[#86efac]/60 leading-snug">
+      Paste chord + lyrics text from a site like Cifra Club. Chord lines (containing only chord names) are detected automatically and paired with the lyric line below them.
+    </p>
+    <textarea id="chord-sheet-input"
+      class="flex-1 bg-[#172017] border border-[#1e2e1e] rounded-lg px-3 py-2 text-xs text-[#f0fdf4] font-mono placeholder-[#86efac]/30 outline-none resize-none"
+      placeholder="Em&#10;No, no es necesario&#10;         D&#10;Que lo entienda&#10;         C&#10;Porque nunca le ha servido"></textarea>
+    <div class="flex justify-end gap-2">
+      <button id="chord-sheet-clear-btn" class="text-xs text-[#f87171]/60 hover:text-[#f87171] px-3 py-1.5 transition-colors">Clear</button>
+      <button id="chord-sheet-cancel" class="text-xs text-[#86efac]/60 hover:text-[#86efac] px-3 py-1.5">Cancel</button>
+      <button id="chord-sheet-save" class="text-xs bg-[#22c55e] hover:bg-[#16a34a] text-black font-semibold rounded-lg px-4 py-1.5 transition-colors">Save</button>
     </div>
   </div>
 

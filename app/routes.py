@@ -87,6 +87,9 @@ class JobPatch(BaseModel):
     song_chord_data: Optional[str] = None
     bpm: Optional[float] = None
     beat_times: Optional[str] = None
+    beat_offset: Optional[float] = None
+    bar_offset: Optional[int] = None
+    chord_sheet: Optional[str] = None
 
 
 class ChordCreate(BaseModel):
@@ -168,7 +171,7 @@ async def delete_job(job_id: str):
 async def get_stems(job_id: str):
     with db() as conn:
         row = conn.execute(
-            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec, song_chord_data, bpm, beat_times FROM jobs WHERE id = ?",
+            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec, song_chord_data, bpm, beat_times, beat_offset, bar_offset, chord_sheet FROM jobs WHERE id = ?",
             (job_id,)
         ).fetchone()
     if not row:
@@ -192,6 +195,9 @@ async def get_stems(job_id: str):
         "song_chord_data": row["song_chord_data"],
         "bpm": row["bpm"],
         "beat_times": row["beat_times"],
+        "beat_offset": row["beat_offset"] or 0,
+        "bar_offset": row["bar_offset"] or 0,
+        "chord_sheet": row["chord_sheet"],
     }
 
 
@@ -403,15 +409,25 @@ async def detect_bpm(job_id: str):
         corr = np.correlate(onset, onset, mode='full')[len(onset)-1:]
         best_lag = int(np.argmax(corr[min_lag:max_lag+1])) + min_lag
         bpm = round(fps * 60 / best_lag, 1)
-        anchor = int(np.argmax(onset[:min(best_lag*8, len(onset))]))
-        frames = []
-        t = anchor
-        while t >= 0:
-            frames.append(t); t -= best_lag
-        t = anchor + best_lag
-        while t < n_frames:
-            frames.append(t); t += best_lag
-        beat_times = sorted(float(f * HOP / SR) for f in frames if f >= 0)
+        # If BPM lands in double-time range (>120), check whether the half-tempo
+        # candidate scores at least 60% as well — if so, prefer it (most songs
+        # are 60-120 BPM; subdivisions often score higher in autocorrelation).
+        if bpm > 120:
+            half_lag = best_lag * 2
+            if half_lag < len(corr) and corr[half_lag] >= 0.6 * corr[best_lag]:
+                best_lag = half_lag
+                bpm = round(fps * 60 / best_lag, 1)
+        beat_interval = 60.0 / bpm  # seconds per beat — exact, no frame rounding
+        # Find a strong anchor onset, then compute its phase within the beat period
+        anchor_frame = int(np.argmax(onset[:min(best_lag * 8, len(onset))]))
+        anchor_time = anchor_frame * HOP / SR
+        phase = anchor_time % beat_interval  # offset of beat 1 from t=0
+        duration_sec = n_frames * HOP / SR
+        beat_times = []
+        t = phase
+        while t <= duration_sec:
+            beat_times.append(round(t, 4))
+            t += beat_interval
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
     if bpm <= 0:

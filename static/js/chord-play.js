@@ -5,11 +5,17 @@ import { renderChordSVG, fetchChords } from './chord-lib.js';
 const BEAT_BOX_PX = 52;       // width of each beat box in pixels
 const ACTIVE_RATIO = 0.4;  // active beat sits at 40% from the left (just left of center)
 const DIAGRAMS_COUNT = 5;     // number of diagrams shown in the diagram row (2 past + current + 2 upcoming)
+const BEATS_PER_BAR = 4;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-let beatTimes = [];            // array of beat timestamps in seconds
-let chordTimeline = [];        // [{time, name}] sorted by time
+let beatTimes = [];            // array of beat timestamps in seconds (with offset applied)
+let rawBeatTimes = [];         // original beat times from DB before offset
+let beatOffset = 0;            // seconds added to all beat times (phase alignment)
+let barOffset = 0;             // which beat index (0-3) is beat 1 of bar 1
+let currentBpm = 0;            // current BPM (may differ from detected after fine-tuning)
+let songDuration = 0;          // song length in seconds (used to regenerate beat grid)
+let chordTimeline = [];        // [{beatIndex, name}] sorted by beatIndex
 let chordLib = {};             // {name: chordObj} lookup from library
 let showDiagrams = true;
 let showFingers = true;
@@ -23,8 +29,21 @@ let pendingPickerBeat = null;  // beat index awaiting chord assignment in edit m
 
 export async function initChordPlay(jobId, stemData) {
   currentJobId = jobId;
-  beatTimes = stemData.beat_times ? JSON.parse(stemData.beat_times) : [];
-  chordTimeline = parseLrcChords(stemData.song_chord_data || '');
+  rawBeatTimes = stemData.beat_times ? JSON.parse(stemData.beat_times) : [];
+  beatOffset = stemData.beat_offset ?? 0;
+  barOffset = stemData.bar_offset ?? 0;
+  currentBpm = stemData.bpm ?? 0;
+  songDuration = stemData.duration_sec ?? 0;
+  beatTimes = rawBeatTimes.map(t => t + beatOffset);
+
+  const rawData = stemData.song_chord_data || '';
+  chordTimeline = parseChordData(rawData, beatTimes);
+
+  // Auto-migrate: if the stored data was in legacy LRC format, save it in the
+  // new beat-index format immediately so future loads are clean.
+  if (rawData.trim().startsWith('[') && chordTimeline.length > 0) {
+    saveChordTimeline();
+  }
 
   const lib = await fetchChords();
   chordLib = Object.fromEntries(lib.map(c => [c.name, c]));
@@ -45,6 +64,11 @@ export async function initChordPlay(jobId, stemData) {
 
 export function resetChordPlay() {
   beatTimes = [];
+  rawBeatTimes = [];
+  beatOffset = 0;
+  barOffset = 0;
+  currentBpm = 0;
+  songDuration = 0;
   chordTimeline = [];
   chordLib = {};
   isEditing = false;
@@ -57,37 +81,58 @@ export function resetChordPlay() {
   if (wrap) wrap.classList.add('hidden');
 }
 
-// ── LRC parse ─────────────────────────────────────────────────────────────────
+// ── Chord data parse / serialize ──────────────────────────────────────────────
 
-function parseLrcChords(lrc) {
-  if (!lrc) return [];
-  const results = [];
-  for (const line of lrc.split('\n')) {
-    const m = line.match(/^\[(\d+):(\d+\.\d+)\](.+)/);
-    if (m) {
-      const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
-      results.push({ time, name: m[3].trim() });
+// Accepts both the new "beatIndex:name" format and legacy LRC "[MM:SS.ss]name".
+// LRC entries are snapped to the nearest beat index using the provided times array.
+function parseChordData(data, timesArr) {
+  if (!data || !data.trim()) return [];
+
+  // Legacy LRC format detection
+  if (data.trim().startsWith('[')) {
+    const lrcEntries = [];
+    for (const line of data.split('\n')) {
+      const m = line.match(/^\[(\d+):(\d+\.\d+)\](.+)/);
+      if (m) {
+        const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
+        lrcEntries.push({ time, name: m[3].trim() });
+      }
     }
+    // Snap each timestamp to the nearest beat index
+    return lrcEntries.map(({ time, name }) => {
+      let nearestIdx = 0;
+      let nearestDist = Infinity;
+      for (let i = 0; i < timesArr.length; i++) {
+        const dist = Math.abs(timesArr[i] - time);
+        if (dist < nearestDist) { nearestDist = dist; nearestIdx = i; }
+        if (timesArr[i] > time + 2) break;
+      }
+      return { beatIndex: nearestIdx, name };
+    }).sort((a, b) => a.beatIndex - b.beatIndex);
   }
-  return results.sort((a, b) => a.time - b.time);
+
+  // New format: "beatIndex:chordName" per line
+  const result = [];
+  for (const line of data.split('\n')) {
+    const m = line.match(/^(\d+):(.+)/);
+    if (m) result.push({ beatIndex: parseInt(m[1]), name: m[2].trim() });
+  }
+  return result.sort((a, b) => a.beatIndex - b.beatIndex);
 }
 
 function serializeChordTimeline() {
-  return chordTimeline.map(({ time, name }) => {
-    const min = Math.floor(time / 60).toString().padStart(2, '0');
-    const sec = (time % 60).toFixed(2).padStart(5, '0');
-    return `[${min}:${sec}]${name}`;
-  }).join('\n');
+  return chordTimeline.map(({ beatIndex, name }) => `${beatIndex}:${name}`).join('\n');
 }
 
 // ── Chord at beat ─────────────────────────────────────────────────────────────
 
+// Returns the chord name active at beatIdx — the most recent entry whose
+// beatIndex is <= beatIdx. Pure index arithmetic, no time comparison.
 function chordAtBeat(beatIdx) {
-  if (!beatTimes.length || !chordTimeline.length) return null;
-  const t = beatTimes[beatIdx];
+  if (!chordTimeline.length) return null;
   let last = null;
   for (const entry of chordTimeline) {
-    if (entry.time <= t + 0.05) last = entry.name;
+    if (entry.beatIndex <= beatIdx) last = entry.name;
     else break;
   }
   return last;
@@ -113,11 +158,24 @@ function renderBeatStrip() {
   for (let i = 0; i < beatTimes.length; i++) {
     const name = chordAtBeat(i);
     const isFirst = i === 0 || name !== chordAtBeat(i - 1);
+    const posInBar = (i - barOffset + BEATS_PER_BAR * 1000) % BEATS_PER_BAR;
 
     const box = document.createElement('div');
-    box.className = 'beat-box';
+    box.className = 'beat-box' + (posInBar === 0 ? ' bar-start' : '');
     box.dataset.beat = i;
-    if (isFirst && name) box.textContent = name;
+
+    // Use a child span so chord name and beat-num never concatenate
+    if (isFirst && name) {
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'beat-chord';
+      nameSpan.textContent = name;
+      box.appendChild(nameSpan);
+    }
+
+    const dot = document.createElement('span');
+    dot.className = 'beat-num';
+    dot.textContent = posInBar + 1;
+    box.appendChild(dot);
 
     box.addEventListener('click', () => onBeatBoxClick(i));
     strip.appendChild(box);
@@ -233,6 +291,86 @@ export function adjustTempo(delta) {
   setTempoPercent(Math.round(playbackRate * 100) + delta);
 }
 
+// ── Bar offset ────────────────────────────────────────────────────────────────
+
+export function setBarOffset(n) {
+  barOffset = ((n % BEATS_PER_BAR) + BEATS_PER_BAR) % BEATS_PER_BAR;
+  renderBeatStrip();
+  _syncBarOffsetUI();
+  if (currentJobId) {
+    fetch(`/api/jobs/${currentJobId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bar_offset: barOffset }),
+    });
+  }
+}
+
+function _syncBarOffsetUI() {
+  document.querySelectorAll('.bar-offset-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.offset) === barOffset);
+  });
+}
+
+// ── Beat offset nudge ─────────────────────────────────────────────────────────
+
+export function nudgeBeatOffsetByBeat(beats) {
+  if (!rawBeatTimes.length) return;
+  const interval = rawBeatTimes.length > 1 ? rawBeatTimes[1] - rawBeatTimes[0] : 0;
+  if (interval > 0) nudgeBeatOffset(beats * interval);
+}
+
+export function nudgeBeatOffset(deltaSec) {
+  if (!rawBeatTimes.length || !currentJobId) return;
+  beatOffset = Math.round((beatOffset + deltaSec) * 1000) / 1000;
+  beatTimes = rawBeatTimes.map(t => t + beatOffset);
+  renderBeatStrip();
+  // Chords stay at their beat indices — only the timing of those beats changes
+  fetch(`/api/jobs/${currentJobId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ beat_offset: beatOffset }),
+  });
+  const label = document.getElementById('beat-offset-label');
+  if (label) label.textContent = (beatOffset >= 0 ? '+' : '') + beatOffset.toFixed(3) + 's';
+}
+
+// ── BPM fine-tune ─────────────────────────────────────────────────────────────
+
+export function adjustBpm(delta) {
+  if (!currentJobId || rawBeatTimes.length < 2 || currentBpm <= 0) return;
+  currentBpm = Math.round((currentBpm + delta) * 10) / 10;
+  currentBpm = Math.max(40, Math.min(240, currentBpm));
+
+  // Regenerate beat grid from the same phase, new interval
+  const phase = rawBeatTimes[0];
+  const interval = 60.0 / currentBpm;
+  const newTimes = [];
+  const end = songDuration > 0 ? songDuration : rawBeatTimes[rawBeatTimes.length - 1];
+  for (let t = phase; t <= end + interval * 0.5; t += interval) {
+    newTimes.push(Math.round(t * 10000) / 10000);
+  }
+  rawBeatTimes = newTimes;
+  beatTimes = rawBeatTimes.map(t => t + beatOffset);
+  renderBeatStrip();
+  refreshEditList();
+
+  // Update BPM labels
+  const fineLabel = document.getElementById('bpm-fine-label');
+  if (fineLabel) fineLabel.textContent = currentBpm.toFixed(1);
+  const badge = document.getElementById('player-bpm');
+  if (badge) badge.textContent = `${currentBpm.toFixed(1)} BPM`;
+  const detectLabel = document.getElementById('chord-detect-label');
+  if (detectLabel) detectLabel.textContent = currentBpm.toFixed(1);
+
+  // Persist new BPM and recalculated beat_times
+  fetch(`/api/jobs/${currentJobId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bpm: currentBpm, beat_times: JSON.stringify(rawBeatTimes) }),
+  });
+}
+
 // ── Editor mode ───────────────────────────────────────────────────────────────
 
 export function enterEditMode() {
@@ -241,6 +379,11 @@ export function enterEditMode() {
   if (strip) strip.dataset.editing = '1';
   const panel = document.getElementById('chord-edit-panel');
   if (panel) panel.classList.remove('hidden');
+  const offsetLabel = document.getElementById('beat-offset-label');
+  if (offsetLabel) offsetLabel.textContent = (beatOffset >= 0 ? '+' : '') + beatOffset.toFixed(3) + 's';
+  const bpmLabel = document.getElementById('bpm-fine-label');
+  if (bpmLabel) bpmLabel.textContent = currentBpm > 0 ? currentBpm.toFixed(1) : '—';
+  _syncBarOffsetUI();
   refreshEditList();
 }
 
@@ -321,13 +464,10 @@ function closePicker() {
 }
 
 function placeChordAtBeat(beatIdx, chordName) {
-  const t = beatTimes[beatIdx];
-  if (t === undefined) return;
-
-  // Remove existing entry at the exact same beat time
-  chordTimeline = chordTimeline.filter(e => Math.abs(e.time - t) > 0.01);
-  chordTimeline.push({ time: t, name: chordName });
-  chordTimeline.sort((a, b) => a.time - b.time);
+  // Remove any existing chord starting at this exact beat index
+  chordTimeline = chordTimeline.filter(e => e.beatIndex !== beatIdx);
+  chordTimeline.push({ beatIndex: beatIdx, name: chordName });
+  chordTimeline.sort((a, b) => a.beatIndex - b.beatIndex);
 
   closePicker();
   pendingPickerBeat = null;
@@ -337,26 +477,17 @@ function placeChordAtBeat(beatIdx, chordName) {
 }
 
 export function removeChordAtBeat(beatIdx) {
-  const t = beatTimes[beatIdx];
-  if (t === undefined) return;
-  // Remove the chord whose start beat matches
-  const name = chordAtBeat(beatIdx);
-  if (!name) return;
-  // Find and remove the timeline entry whose time matches the first beat of this chord
-  let entryTime = null;
-  for (let i = beatIdx; i >= 0; i--) {
-    if (chordAtBeat(i) !== name) {
-      entryTime = beatTimes[i + 1];
-      break;
-    }
-    if (i === 0) entryTime = beatTimes[0];
+  // Find the timeline entry that covers beatIdx (last entry at or before it)
+  let target = null;
+  for (const entry of chordTimeline) {
+    if (entry.beatIndex <= beatIdx) target = entry;
+    else break;
   }
-  if (entryTime !== undefined) {
-    chordTimeline = chordTimeline.filter(e => Math.abs(e.time - entryTime) > 0.01);
-    saveChordTimeline();
-    renderBeatStrip();
-    refreshEditList();
-  }
+  if (!target) return;
+  chordTimeline = chordTimeline.filter(e => e !== target);
+  saveChordTimeline();
+  renderBeatStrip();
+  refreshEditList();
 }
 
 export function clearAllChords() {
@@ -388,10 +519,15 @@ export function refreshEditList() {
 
     const timeSpan = document.createElement('span');
     timeSpan.className = 'chord-edit-time';
-    const min = Math.floor(entry.time / 60).toString().padStart(2, '0');
-    const sec = (entry.time % 60).toFixed(2).padStart(5, '0');
-    timeSpan.textContent = `${min}:${sec}`;
-    timeSpan.addEventListener('click', () => window.seekTo(entry.time));
+    const t = beatTimes[entry.beatIndex];
+    if (t !== undefined) {
+      const min = Math.floor(t / 60).toString().padStart(2, '0');
+      const sec = (t % 60).toFixed(2).padStart(5, '0');
+      timeSpan.textContent = `${min}:${sec}`;
+      timeSpan.addEventListener('click', () => window.seekTo(t));
+    } else {
+      timeSpan.textContent = `#${entry.beatIndex}`;
+    }
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'chord-edit-name';
@@ -412,6 +548,76 @@ export function refreshEditList() {
     row.appendChild(del);
     list.appendChild(row);
   });
+}
+
+// ── Bulk import ───────────────────────────────────────────────────────────────
+
+export function openImportModal() {
+  const modal = document.getElementById('chord-import-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  const ta = document.getElementById('chord-import-text');
+  if (ta) ta.focus();
+}
+
+function closeImportModal() {
+  const modal = document.getElementById('chord-import-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function applyBulkImport() {
+  const ta = document.getElementById('chord-import-text');
+  if (!ta) return;
+
+  const tokens = ta.value.trim().split(/[\s\n]+/).filter(Boolean);
+
+  let beatIdx = 0;
+  let prevChord = null;
+  const entries = [];
+
+  for (const tok of tokens) {
+    if (tok === '|') {
+      // Snap forward to the next bar-start beat (posInBar === 0)
+      while (beatIdx < beatTimes.length) {
+        const pos = (beatIdx - barOffset + BEATS_PER_BAR * 1000) % BEATS_PER_BAR;
+        if (pos === 0) break;
+        beatIdx++;
+      }
+      continue;
+    }
+
+    if (beatIdx >= beatTimes.length) break;
+
+    if (tok === '.') {
+      // hold current chord, advance one beat
+    } else if (tok === '-') {
+      prevChord = null;
+    } else if (tok !== prevChord) {
+      entries.push({ beatIndex: beatIdx, name: tok });
+      prevChord = tok;
+    }
+
+    beatIdx++;
+  }
+
+  // Replace chords up to the last imported beat index, keep everything after
+  const lastImportedBeat = beatIdx - 1;
+  chordTimeline = chordTimeline.filter(e => e.beatIndex > lastImportedBeat);
+  chordTimeline.push(...entries);
+  chordTimeline.sort((a, b) => a.beatIndex - b.beatIndex);
+
+  closeImportModal();
+  saveChordTimeline();
+  renderBeatStrip();
+  refreshEditList();
+}
+
+// Wire up import modal buttons (called once after DOM ready)
+export function initImportModal() {
+  document.getElementById('chord-edit-import')?.addEventListener('click', openImportModal);
+  document.getElementById('chord-import-close')?.addEventListener('click', closeImportModal);
+  document.getElementById('chord-import-cancel')?.addEventListener('click', closeImportModal);
+  document.getElementById('chord-import-apply')?.addEventListener('click', applyBulkImport);
 }
 
 // ── Refresh chord library in picker when library changes ─────────────────────

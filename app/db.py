@@ -87,6 +87,9 @@ def init_db():
             ("song_chord_data", "TEXT"),
             ("bpm", "REAL"),
             ("beat_times", "TEXT"),
+            ("beat_offset", "REAL NOT NULL DEFAULT 0"),
+            ("bar_offset", "INTEGER NOT NULL DEFAULT 0"),
+            ("chord_sheet", "TEXT"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")

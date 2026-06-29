@@ -5,13 +5,14 @@ import {
   adjustVolume, toggleMute, toggleFullscreen, toggleStem, soloStem, setPlaybackRate,
 } from './player.js';
 import {
-  resetLyrics, initLyrics, cycleLyricsMode, setSeekFn,
+  resetLyrics, initLyrics, cycleLyricsMode, setLyricsMode, getLyricsMode, setSeekFn,
 } from './chords.js';
 import {
   initChordPlay, resetChordPlay, tickChordPlay,
   toggleDiagrams, adjustTempo,
   enterEditMode, exitEditMode,
   clearAllChords, refreshEditList, refreshChordLib,
+  initImportModal, nudgeBeatOffset, nudgeBeatOffsetByBeat, setBarOffset, adjustBpm,
 } from './chord-play.js';
 import {
   fetchChords, createChord, updateChord, deleteChord, renderChordSVG,
@@ -165,6 +166,7 @@ async function openPlayer(job) {
 
   $('player-title').textContent  = job.title || job.filename || 'Song';
   $('player-artist').textContent = job.artist || '';
+  $('player-bpm').classList.add('hidden');
   $('stem-grid').classList.add('hidden');
   $('stem-loading').classList.remove('hidden');
   $('stem-loading-text').textContent = 'Loading stems…';
@@ -175,9 +177,11 @@ async function openPlayer(job) {
 
   try {
     const data = await api(`/api/stems/${job.id}`);
-    initLyrics(data.chord_data, data.chord_source);
+    _currentChordSheet = data.chord_sheet || '';
+    initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
     await initChordPlay(job.id, data);
     applyChordUIState(job.id, data);
+    setChordStripVisible(false);
     await loadStems(job.id, data.stems || []);
   } catch (e) {
     $('stem-loading-text').textContent = 'Error: ' + e.message;
@@ -189,7 +193,55 @@ function closePlayer() {
   resetLyrics();
   resetChordPlay();
   exitEditMode();
+  closePlayerActions();
   showLibrary();
+}
+
+// ── Player Actions Sheet ──────────────────────────────────────────────────────
+
+function openPlayerActions() {
+  const hasLyricsAvailable = !$('lyrics-toggle-btn').classList.contains('hidden');
+  $('lyrics-section').classList.toggle('hidden', !hasLyricsAvailable);
+  updateLyricPills();
+  const volPct = parseInt($('vol-label').textContent) || 100;
+  $('vol-slider').value = volPct;
+  _volSliderPrev = volPct;
+  const tempoPct = parseInt($('tempo-label').textContent) || 100;
+  $('tempo-slider').value = tempoPct;
+  _tempoSliderPrev = tempoPct;
+  $('player-actions-sheet').classList.remove('hidden');
+  $('player-actions-backdrop').classList.remove('hidden');
+}
+
+function closePlayerActions() {
+  $('player-actions-sheet').classList.add('hidden');
+  $('player-actions-backdrop').classList.add('hidden');
+}
+
+function updateLyricPills() {
+  const mode = getLyricsMode();
+  const map = { 'lyrics-pill-off': null, 'lyrics-pill-chordify': 'chordify', 'lyrics-pill-spotify': 'spotify' };
+  for (const [id, m] of Object.entries(map)) {
+    const btn = $(id);
+    if (!btn) continue;
+    const active = mode === m;
+    btn.classList.toggle('bg-[#22c55e]',    active);
+    btn.classList.toggle('text-[#0a0f0a]',  active);
+    btn.classList.toggle('border-[#22c55e]', active);
+    btn.classList.toggle('text-[#86efac]',  !active);
+  }
+}
+
+function setChordStripVisible(visible) {
+  $('chord-strip-wrap').classList.toggle('hidden', !visible);
+  $('chord-tabs-section').classList.toggle('hidden', !visible);
+  const btn = $('chord-strip-toggle');
+  if (!btn) return;
+  btn.classList.toggle('bg-[#14532d]',     visible);
+  btn.classList.toggle('border-[#22c55e]', visible);
+  btn.classList.toggle('text-[#22c55e]',   visible);
+  btn.classList.toggle('bg-[#0d130d]',     !visible);
+  btn.classList.toggle('text-[#86efac]',   !visible);
 }
 
 // ── Add Song ──────────────────────────────────────────────────────────────────
@@ -303,33 +355,42 @@ async function submitSong() {
 // ── Chord UI state helper ─────────────────────────────────────────────────────
 
 let _currentPlayerJobId = null;
+let _currentChordSheet  = '';
+let _volSliderPrev      = 100;
+let _tempoSliderPrev    = 100;
 
 function applyChordUIState(jobId, data) {
   _currentPlayerJobId = jobId;
   const hasBeats = !!(data.beat_times);
-  $('chord-tabs').classList.toggle('hidden', !hasBeats);
+  $('chord-strip-toggle').classList.toggle('hidden', !hasBeats);
   $('chord-diagrams-btn').classList.toggle('hidden', !hasBeats);
-  if (hasBeats) {
-    $('chord-diagrams-btn').classList.add('text-[#22c55e]');
-    $('chord-diagrams-btn').classList.remove('text-[#86efac]');
+  $('tempo-section').classList.toggle('hidden', !hasBeats);
+  $('chord-detect-btn').classList.remove('hidden');
+  $('actions-tile-section').classList.remove('hidden');
+  const bpmBadge = $('player-bpm');
+  if (data.bpm) {
+    bpmBadge.textContent = `${Math.round(data.bpm)} BPM`;
+    bpmBadge.classList.remove('hidden');
+    $('chord-detect-label').textContent = `${Math.round(data.bpm)}`;
+  } else {
+    bpmBadge.classList.add('hidden');
   }
-  $('tempo-control').classList.toggle('hidden', !hasBeats);
-  $('chord-detect-btn').classList.toggle('hidden', hasBeats);
-  if (hasBeats) setChordTab('diagrams');
 }
 
 async function detectBPM() {
   if (!_currentPlayerJobId) return;
+  const wasStripVisible = !$('chord-strip-wrap').classList.contains('hidden');
+  closePlayerActions();
   const btn = $('chord-detect-btn');
   const label = $('chord-detect-label');
   btn.disabled = true;
   label.textContent = '…';
   try {
     const data = await api(`/api/jobs/${_currentPlayerJobId}/detect-bpm`, { method: 'POST' });
-    // Reload stems data to get fresh beat_times
     const stemData = await api(`/api/stems/${_currentPlayerJobId}`);
     await initChordPlay(_currentPlayerJobId, stemData);
     applyChordUIState(_currentPlayerJobId, stemData);
+    setChordStripVisible(wasStripVisible);
     label.textContent = `${Math.round(data.bpm)}`;
   } catch (e) {
     label.textContent = 'ERR';
@@ -338,6 +399,57 @@ async function detectBPM() {
   }
   btn.disabled = false;
   label.textContent = 'BPM';
+}
+
+// ── Chord sheet modal ─────────────────────────────────────────────────────────
+
+function openChordSheetModal() {
+  $('chord-sheet-input').value = _currentChordSheet;
+  $('chord-sheet-modal').classList.remove('hidden');
+  $('chord-sheet-input').focus();
+}
+
+function closeChordSheetModal() {
+  $('chord-sheet-modal').classList.add('hidden');
+}
+
+async function saveChordSheet() {
+  if (!_currentPlayerJobId) return;
+  const value = $('chord-sheet-input').value;
+  try {
+    await api(`/api/jobs/${_currentPlayerJobId}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chord_sheet: value }),
+    });
+    _currentChordSheet = value;
+    const data = await api(`/api/stems/${_currentPlayerJobId}`);
+    resetLyrics();
+    initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
+    closeChordSheetModal();
+  } catch (e) {
+    alert('Failed to save chord sheet: ' + e.message);
+  }
+}
+
+async function clearChordSheet() {
+  if (!_currentPlayerJobId) return;
+  if (!confirm('Clear the chord sheet?')) return;
+  try {
+    await api(`/api/jobs/${_currentPlayerJobId}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chord_sheet: '' }),
+    });
+    _currentChordSheet = '';
+    $('chord-sheet-input').value = '';
+    const data = await api(`/api/stems/${_currentPlayerJobId}`);
+    resetLyrics();
+    initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
+    closeChordSheetModal();
+  } catch (e) {
+    console.error('clear chord sheet:', e);
+  }
 }
 
 // ── Chord tabs (Diagrams / Edit) ──────────────────────────────────────────────
@@ -757,9 +869,37 @@ $('btn-chords').addEventListener('click', showChordLibrary);
 
 // Player header
 $('btn-back').addEventListener('click', closePlayer);
-$('vol-btn').addEventListener('click', toggleMute);
 $('btn-fullscreen').addEventListener('click', toggleFullscreen);
-$('lyrics-toggle-btn').addEventListener('click', cycleLyricsMode);
+$('btn-player-actions').addEventListener('click', openPlayerActions);
+$('player-actions-backdrop').addEventListener('click', closePlayerActions);
+
+// Actions sheet — volume
+$('vol-btn').addEventListener('click', toggleMute);
+$('vol-slider').addEventListener('input', e => {
+  const newVal = parseInt(e.target.value);
+  const delta = (newVal - _volSliderPrev) / 100;
+  _volSliderPrev = newVal;
+  adjustVolume(delta);
+});
+
+// Actions sheet — tempo
+$('tempo-slider').addEventListener('input', e => {
+  const newVal = parseInt(e.target.value);
+  const delta = newVal - _tempoSliderPrev;
+  _tempoSliderPrev = newVal;
+  if (delta !== 0) adjustTempo(delta);
+});
+
+// Actions sheet — chord strip toggle
+$('chord-strip-toggle').addEventListener('click', () => {
+  const isVisible = !$('chord-strip-wrap').classList.contains('hidden');
+  setChordStripVisible(!isVisible);
+});
+
+// Actions sheet — lyrics
+$('lyrics-pill-off').addEventListener('click',      () => { setLyricsMode(null);        updateLyricPills(); closePlayerActions(); });
+$('lyrics-pill-chordify').addEventListener('click', () => { setLyricsMode('chordify');  updateLyricPills(); closePlayerActions(); });
+$('lyrics-pill-spotify').addEventListener('click',  () => { setLyricsMode('spotify');   updateLyricPills(); closePlayerActions(); });
 
 // Progress bar
 $('progress-bar').addEventListener('click', seekTo);
@@ -785,13 +925,28 @@ $('add-btn').addEventListener('click',       submitSong);
 // Chord detect BPM
 $('chord-detect-btn').addEventListener('click', detectBPM);
 
+// Chord sheet modal
+$('chord-sheet-open-btn').addEventListener('click', openChordSheetModal);
+$('chord-sheet-close').addEventListener('click',    closeChordSheetModal);
+$('chord-sheet-cancel').addEventListener('click',   closeChordSheetModal);
+$('chord-sheet-save').addEventListener('click',     saveChordSheet);
+$('chord-sheet-clear-btn').addEventListener('click', clearChordSheet);
+
 // Chord tabs + strip controls
-$('chord-tab-diagrams').addEventListener('click', () => setChordTab('diagrams'));
-$('chord-tab-edit').addEventListener('click',     () => setChordTab('edit'));
+$('chord-tab-diagrams').addEventListener('click', () => { setChordStripVisible(true); setChordTab('diagrams'); closePlayerActions(); });
+$('chord-tab-edit').addEventListener('click',     () => { setChordStripVisible(true); setChordTab('edit');     closePlayerActions(); });
 $('chord-diagrams-btn').addEventListener('click', toggleDiagrams);
-$('tempo-down').addEventListener('click', () => adjustTempo(-5));
-$('tempo-up').addEventListener('click',   () => adjustTempo(5));
 $('chord-edit-clear').addEventListener('click', () => { if (confirm('Clear all chords?')) clearAllChords(); });
+$('beat-nudge-beat-back').addEventListener('click', () => nudgeBeatOffsetByBeat(-1));
+$('beat-nudge-back').addEventListener('click',      () => nudgeBeatOffset(-0.025));
+$('beat-nudge-fwd').addEventListener('click',       () => nudgeBeatOffset(+0.025));
+$('beat-nudge-beat-fwd').addEventListener('click',  () => nudgeBeatOffsetByBeat(+1));
+$('bpm-nudge-down').addEventListener('click', () => adjustBpm(-0.1));
+$('bpm-nudge-up').addEventListener('click',   () => adjustBpm(+0.1));
+document.querySelectorAll('.bar-offset-btn').forEach(btn =>
+  btn.addEventListener('click', () => setBarOffset(parseInt(btn.dataset.offset)))
+);
+initImportModal();
 
 // Chord library
 $('chord-lib-back').addEventListener('click', showLibrary);
