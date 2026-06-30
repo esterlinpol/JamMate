@@ -5,13 +5,7 @@ services:
       - "8000:8000"
     volumes:
       - jammate-data:/app/data
-    networks:
-      - proxy
     restart: unless-stopped
 
 volumes:
   jammate-data:
-
-networks:
-  proxy:
-    external: true

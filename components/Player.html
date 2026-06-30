@@ -245,8 +245,19 @@ Em7 . . . | D . . . | C . G/B . | Am7 . B7 ."></textarea>
       <span class="text-xs text-[#86efac] font-semibold uppercase tracking-widest">Chord Sheet</span>
       <button id="chord-sheet-close" class="text-[#86efac] hover:text-white text-lg leading-none">✕</button>
     </div>
+    <!-- Cifra Club auto-fetch row -->
+    <div class="flex gap-2 items-center">
+      <input id="cifra-url-input" type="url"
+        placeholder="Cifra Club URL (leave blank to auto-search)"
+        class="flex-1 bg-[#172017] border border-[#1e2e1e] rounded-lg px-2 py-1.5 text-xs text-[#f0fdf4] placeholder-[#86efac]/30 outline-none focus:border-[#22c55e]/50"/>
+      <button id="cifra-fetch-btn"
+        class="text-xs bg-[#172017] border border-[#1e2e1e] hover:border-[#22c55e]/60 text-[#86efac] hover:text-green-300 rounded-lg px-3 py-1.5 transition-colors flex-shrink-0 disabled:opacity-40">
+        Fetch
+      </button>
+    </div>
+    <span id="cifra-fetch-status" class="text-[10px] text-[#86efac]/50 -mt-1.5 min-h-[14px]"></span>
     <p class="text-[10px] text-[#86efac]/60 leading-snug">
-      Paste chord + lyrics text from a site like Cifra Club. Chord lines (containing only chord names) are detected automatically and paired with the lyric line below them.
+      Or paste chord + lyrics text manually. Chord lines are detected automatically and paired with the lyric line below them.
     </p>
     <textarea id="chord-sheet-input"
       class="flex-1 bg-[#172017] border border-[#1e2e1e] rounded-lg px-3 py-2 text-xs text-[#f0fdf4] font-mono placeholder-[#86efac]/30 outline-none resize-none"

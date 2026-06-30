@@ -177,7 +177,8 @@ async function openPlayer(job) {
 
   try {
     const data = await api(`/api/stems/${job.id}`);
-    _currentChordSheet = data.chord_sheet || '';
+    _currentChordSheet     = data.chord_sheet || '';
+    _currentChordSourceUrl = data.chord_source_url || '';
     initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
     await initChordPlay(job.id, data);
     applyChordUIState(job.id, data);
@@ -354,8 +355,9 @@ async function submitSong() {
 
 // ── Chord UI state helper ─────────────────────────────────────────────────────
 
-let _currentPlayerJobId = null;
-let _currentChordSheet  = '';
+let _currentPlayerJobId    = null;
+let _currentChordSheet     = '';
+let _currentChordSourceUrl = '';
 let _volSliderPrev      = 100;
 let _tempoSliderPrev    = 100;
 
@@ -405,6 +407,8 @@ async function detectBPM() {
 
 function openChordSheetModal() {
   $('chord-sheet-input').value = _currentChordSheet;
+  $('cifra-url-input').value   = _currentChordSourceUrl;
+  $('cifra-fetch-status').textContent = '';
   $('chord-sheet-modal').classList.remove('hidden');
   $('chord-sheet-input').focus();
 }
@@ -449,6 +453,34 @@ async function clearChordSheet() {
     closeChordSheetModal();
   } catch (e) {
     console.error('clear chord sheet:', e);
+  }
+}
+
+async function fetchCifraSheet() {
+  if (!_currentPlayerJobId) return;
+  const urlInput = $('cifra-url-input');
+  const status   = $('cifra-fetch-status');
+  const btn      = $('cifra-fetch-btn');
+  const url      = urlInput.value.trim();
+  btn.disabled   = true;
+  status.textContent = url ? 'Fetching…' : 'Searching Cifra Club…';
+  try {
+    const data = await api(`/api/jobs/${_currentPlayerJobId}/fetch-cifra`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ url }),
+    });
+    $('chord-sheet-input').value = data.chord_sheet;
+    _currentChordSheet           = data.chord_sheet;
+    _currentChordSourceUrl       = data.source_url || url;
+    if (data.source_url) urlInput.value = data.source_url;
+    status.textContent = 'Fetched — review and click Save';
+    status.style.color = '#4ade80';
+  } catch (e) {
+    status.textContent = e.message || 'Failed to fetch';
+    status.style.color = '#f87171';
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -931,6 +963,7 @@ $('chord-sheet-close').addEventListener('click',    closeChordSheetModal);
 $('chord-sheet-cancel').addEventListener('click',   closeChordSheetModal);
 $('chord-sheet-save').addEventListener('click',     saveChordSheet);
 $('chord-sheet-clear-btn').addEventListener('click', clearChordSheet);
+$('cifra-fetch-btn').addEventListener('click',      fetchCifraSheet);
 
 // Chord tabs + strip controls
 $('chord-tab-diagrams').addEventListener('click', () => { setChordStripVisible(true); setChordTab('diagrams'); closePlayerActions(); });

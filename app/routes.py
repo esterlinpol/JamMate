@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from html.parser import HTMLParser as _HTMLParser
 from pathlib import Path
 from typing import Optional
 
@@ -479,3 +480,161 @@ async def worker_heartbeat():
             (str(time.time()),),
         )
     return {"ok": True}
+
+
+# ── Cifra Club ─────────────────────────────────────────────────────────────────
+
+_CIFRA_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "es,pt;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+# Matches chord roots like C, C#, Cb with optional quality + optional bass note
+_CHORD_NAME_RE = re.compile(
+    r'\b[A-G][#b]?(?:m|maj|M|min|sus|add|dim|aug|°|\+)?(?:\d+)?(?:/[A-G][#b]?)?\b'
+)
+
+
+class _PreExtractor(_HTMLParser):
+    """Collect text from every <pre> element on the page."""
+
+    def __init__(self):
+        super().__init__()
+        self._in_pre = False
+        self._buf: list[str] = []
+        self.blocks: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "pre":
+            self._in_pre = True
+            self._buf = []
+
+    def handle_endtag(self, tag):
+        if tag == "pre" and self._in_pre:
+            self._in_pre = False
+            text = "".join(self._buf)
+            if text.strip():
+                self.blocks.append(text)
+            self._buf = []
+
+    def handle_data(self, data):
+        if self._in_pre:
+            self._buf.append(data)
+
+    def handle_entityref(self, name):
+        if self._in_pre:
+            self._buf.append(
+                {"nbsp": " ", "amp": "&", "lt": "<", "gt": ">",
+                 "apos": "'", "quot": '"'}.get(name, "")
+            )
+
+    def handle_charref(self, name):
+        if self._in_pre:
+            try:
+                ch = chr(int(name[1:], 16) if name.startswith("x") else int(name))
+                self._buf.append(ch)
+            except Exception:
+                pass
+
+
+def _cifra_fetch_url(url: str) -> str:
+    req = urllib.request.Request(url, headers=_CIFRA_HEADERS)
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        raw = resp.read()
+        ct = resp.headers.get("Content-Type", "")
+        charset = "utf-8"
+        if "charset=" in ct:
+            charset = ct.split("charset=")[-1].strip().split(";")[0].strip()
+        return raw.decode(charset, errors="replace")
+
+
+def _cifra_slugify(text: str) -> str:
+    """Convert a title/artist to the Cifra Club URL slug format."""
+    import unicodedata
+    nfkd = unicodedata.normalize("NFKD", text)
+    ascii_text = "".join(c for c in nfkd if not unicodedata.combining(c))
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")
+    return slug
+
+
+def _cifra_find_url(artist: str, title: str) -> str | None:
+    """Build a Cifra Club song URL from artist + title and verify it exists."""
+    slug_a = _cifra_slugify(artist)
+    slug_t = _cifra_slugify(title)
+    if not slug_a or not slug_t:
+        return None
+    # Try the international (.com) domain first, then the Brazilian one
+    for domain in ("https://www.cifraclub.com", "https://www.cifraclub.com.br"):
+        candidate = f"{domain}/{slug_a}/{slug_t}/"
+        try:
+            req = urllib.request.Request(candidate, headers=_CIFRA_HEADERS)
+            req.get_method = lambda: "HEAD"
+            with urllib.request.urlopen(req, timeout=8):
+                return candidate
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                continue
+        except Exception:
+            pass
+    return None
+
+
+def _parse_cifra_page(html_text: str) -> str:
+    """Extract chord+lyric text from a Cifra Club song page."""
+    parser = _PreExtractor()
+    parser.feed(html_text)
+    if not parser.blocks:
+        return ""
+    # Pick the <pre> block richest in chord-name tokens
+    best = max(parser.blocks, key=lambda b: len(_CHORD_NAME_RE.findall(b)))
+    if not _CHORD_NAME_RE.search(best):
+        return ""
+    return best.strip()
+
+
+@router.post("/api/jobs/{job_id}/fetch-cifra")
+async def fetch_cifra(job_id: str, request: Request):
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT title, artist FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    if not row:
+        return JSONResponse({"error": "job not found"}, status_code=404)
+
+    source_url = url
+    if not source_url:
+        source_url = _cifra_find_url(row["artist"] or "", row["title"] or "")
+        if not source_url:
+            return JSONResponse(
+                {"error": f"Could not find \"{row['title']}\" by \"{row['artist']}\" on Cifra Club. Paste the URL manually."},
+                status_code=404,
+            )
+
+    try:
+        html_text = _cifra_fetch_url(source_url)
+    except urllib.error.URLError as e:
+        return JSONResponse({"error": f"Network error: {e.reason}"}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to fetch page: {e}"}, status_code=502)
+
+    chord_sheet = _parse_cifra_page(html_text)
+    if not chord_sheet:
+        return JSONResponse(
+            {"error": "Page fetched but no chord content found. Try pasting the URL manually."},
+            status_code=422,
+        )
+
+    with db() as conn:
+        conn.execute(
+            "UPDATE jobs SET chord_sheet = ?, chord_source_url = ?, updated_at = ? WHERE id = ?",
+            (chord_sheet, source_url, time.time(), job_id),
+        )
+
+    return {"chord_sheet": chord_sheet, "source_url": source_url}
