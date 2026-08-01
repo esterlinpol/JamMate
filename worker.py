@@ -29,6 +29,8 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
 
 _RUNNER = Path(__file__).parent / "demucs_runner.py"
+_CIFRA_ATTEMPTS = 2       # a transient network failure shouldn't cost the sheet
+_CIFRA_BACKOFF = 1.5      # seconds
 _SESSION = requests.Session()
 _SESSION.headers.update({"Content-Type": "application/json"})
 
@@ -42,6 +44,35 @@ def _patch(server: str, job_id: str, **kwargs):
         _SESSION.patch(f"{server}/api/jobs/{job_id}", json=kwargs, timeout=15)
     except Exception as e:
         print(f"[worker] patch failed: {e}", flush=True)
+
+
+def _fetch_cifra_sheet(server: str, job_id: str) -> bool:
+    """Ask the server to find and import a Cifra Club sheet for this song.
+
+    Posting an empty URL makes the endpoint auto-search by artist + title, and it
+    writes chord_sheet itself — so the parsing and ad-stripping live in one place.
+    Never fatal: no sheet just means the user imports one by hand later.
+    """
+    for attempt in range(1, _CIFRA_ATTEMPTS + 1):
+        try:
+            r = _SESSION.post(
+                f"{server}/api/jobs/{job_id}/fetch-cifra", json={"url": ""}, timeout=45
+            )
+            if r.status_code == 200:
+                return True
+            # 404 = not on Cifra Club, 422 = page had no chords. Neither improves
+            # by asking again, so don't waste the song's processing time on it.
+            if r.status_code in (404, 422):
+                print(f"[worker] no Cifra sheet: {r.json().get('error', r.status_code)}", flush=True)
+                return False
+            reason = f"HTTP {r.status_code}"
+        except Exception as e:
+            reason = str(e) or e.__class__.__name__
+        if attempt < _CIFRA_ATTEMPTS:
+            time.sleep(_CIFRA_BACKOFF)
+        else:
+            print(f"[worker] Cifra fetch failed: {reason}", flush=True)
+    return False
 
 
 def _heartbeat(server: str):
@@ -332,7 +363,12 @@ def _process_job(server: str, job: dict, device: str):
         else:
             print("[worker] no lyrics found", flush=True)
 
-        # ── Step 5: Detect BPM from drums stem ────────────────────────────
+        # ── Step 5: Import the Cifra Club chord sheet ─────────────────────
+        _patch(server, job_id, progress=92, progress_phase="Fetching chords…")
+        if _fetch_cifra_sheet(server, job_id):
+            print("[worker] Cifra sheet imported", flush=True)
+
+        # ── Step 6: Detect BPM from drums stem ────────────────────────────
         bpm = None
         beat_times: list[float] = []
         drums_ogg = tmp_path / "drums.ogg"
@@ -346,7 +382,7 @@ def _process_job(server: str, job: dict, device: str):
         else:
             print("[worker] drums stem not found, skipping BPM detection", flush=True)
 
-        # ── Step 6: Mark done ─────────────────────────────────────────────
+        # ── Step 7: Mark done ─────────────────────────────────────────────
         done_patch: dict = {"status": "done", "progress": 100, "progress_phase": "Done"}
         if duration is not None:
             done_patch["duration_sec"] = duration

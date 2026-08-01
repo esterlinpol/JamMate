@@ -24,6 +24,7 @@ export function resetLyrics() {
   parsedChordSheet = null;
   currentLyricIdx  = -1;
   hasLyrics        = false;
+  resetAutoscroll();
   $('lyrics-toggle-btn').classList.add('hidden');
   $('lyrics-chordify-panel').classList.add('hidden');
   $('lyrics-spotify-panel').classList.add('hidden');
@@ -43,7 +44,108 @@ export function initLyrics(chordData, chordSource, chordSheet) {
     parsedChordSheet = assignTimestamps(sections);
     if (parsedChordSheet.length > 0) hasLyrics = true;
   }
-  if (hasLyrics) $('lyrics-toggle-btn').classList.remove('hidden');
+  if (hasLyrics) {
+    $('lyrics-toggle-btn').classList.remove('hidden');
+    // Default view: the chords + lyrics sheet when one exists, else plain lyrics
+    setLyricsMode(parsedChordSheet && parsedChordSheet.length ? 'chordify' : 'spotify');
+  }
+}
+
+// ── Autoscroll ────────────────────────────────────────────────────────────────
+// Fallback for songs whose lyrics never arrived: with no timestamps to follow,
+// the panel is scrolled straight from playback position instead. Deriving the
+// position from the clock rather than incrementing a timer means seeking,
+// pausing and tempo changes all come out right for free.
+
+export const AS_STEP = 5;              // percentage points per stepper tap
+const AS_MIN = 25, AS_MAX = 400;
+
+let songDuration   = 0;
+let asEnabled      = false;
+let asSpeed        = 100;              // % of "ends exactly when the song does"
+let asManualOffset = 0;                // px the user dragged away from that
+let asBase         = 0;                // last computed position, before the offset
+let asLastSet      = null;             // last scrollTop we wrote, to spot our own events
+let asWatching     = false;
+
+export function setSongDuration(sec) { songDuration = sec || 0; }
+export function getAutoscrollSpeed() { return asSpeed; }
+export function isAutoscrollOn() { return asEnabled; }
+
+// True when nothing in the view carries a timestamp, so autoscroll is the only
+// way for it to keep up with the song.
+export function needsAutoscroll() {
+  if (parsedChordSheet && parsedChordSheet.length) {
+    return !parsedChordSheet.some(s => s.time !== null);
+  }
+  return !!plainLyricsText;
+}
+
+export function setAutoscroll(on) {
+  asEnabled      = !!on && hasLyrics;
+  asManualOffset = 0;
+  asLastSet      = null;
+  if (asEnabled) watchManualScroll();
+  syncAutoscrollPanels();
+  return asEnabled;
+}
+
+export function setAutoscrollSpeed(pct) {
+  asSpeed = Math.max(AS_MIN, Math.min(AS_MAX, Math.round(pct)));
+  return asSpeed;
+}
+
+export function adjustAutoscrollSpeed(delta) { return setAutoscrollSpeed(asSpeed + delta); }
+
+function resetAutoscroll() {
+  asEnabled      = false;
+  asManualOffset = 0;
+  asBase         = 0;
+  asLastSet      = null;
+  songDuration   = 0;
+  syncAutoscrollPanels();
+}
+
+const AS_PANELS = ['lyrics-chordify-panel', 'lyrics-spotify-panel'];
+
+function scrollPanel() {
+  if (lyricsMode === 'chordify') return $('lyrics-chordify-panel');
+  if (lyricsMode === 'spotify')  return $('lyrics-spotify-panel');
+  return null;
+}
+
+// Both panels scroll smoothly by default, which would fight a position written
+// every frame — the active one drops to instant scrolling while autoscroll runs.
+function syncAutoscrollPanels() {
+  const active = asEnabled ? scrollPanel() : null;
+  AS_PANELS.forEach(id => $(id).classList.toggle('as-active', $(id) === active));
+}
+
+function watchManualScroll() {
+  if (asWatching) return;
+  asWatching = true;
+  AS_PANELS.forEach(id => {
+    $(id).addEventListener('scroll', () => {
+      const panel = scrollPanel();
+      if (!asEnabled || !panel || panel.id !== id) return;
+      // Ignore the scroll events our own writes generate
+      if (asLastSet !== null && Math.abs(panel.scrollTop - asLastSet) <= 2) return;
+      // A drag is a deliberate nudge — hold that alignment from here on
+      asManualOffset = panel.scrollTop - asBase;
+    }, { passive: true });
+  });
+}
+
+function applyAutoscroll(t) {
+  const panel = scrollPanel();
+  if (!panel || !songDuration) return;
+  const range = panel.scrollHeight - panel.clientHeight;
+  if (range <= 0) return;
+  asBase = (t / songDuration) * range * (asSpeed / 100);
+  const target = Math.max(0, Math.min(range, asBase + asManualOffset));
+  if (Math.abs(panel.scrollTop - target) < 0.5) return;
+  panel.scrollTop = target;
+  asLastSet = panel.scrollTop;
 }
 
 export function parseLRC(lrc) {
@@ -116,7 +218,8 @@ function parseChordSheet(text) {
       const nextTrimmed = nextLine.trim();
       // Pair with the next lyric line (not another chord line, not a section label)
       if (nextTrimmed && !isChordLine(nextLine) && !nextTrimmed.match(SECTION_LINE_RE)) {
-        sections.push({ sectionLabel: null, chordLine, lyricLine: nextTrimmed, isMetadata: false });
+        // Keep the lyric's leading spaces — chords are positioned by column
+        sections.push({ sectionLabel: null, chordLine, lyricLine: nextLine.trimEnd(), isMetadata: false });
         i += 2;
       } else {
         sections.push({ sectionLabel: null, chordLine, lyricLine: '', isMetadata: false });
@@ -126,7 +229,7 @@ function parseChordSheet(text) {
     }
 
     // Lyric or other text line
-    sections.push({ sectionLabel: null, chordLine: '', lyricLine: trimmed, isMetadata: false });
+    sections.push({ sectionLabel: null, chordLine: '', lyricLine: line.trimEnd(), isMetadata: false });
     i++;
   }
 
@@ -273,7 +376,7 @@ function applyLyricsMode() {
     renderChordsPlusLyrics();
     setTimeout(() => {
       const el = $(`cs-${currentLyricIdx}`);
-      if (el) el.scrollIntoView({ block: 'center' });
+      if (el && !asEnabled) centerChordSheetSection(el, 'auto');
     }, 50);
   } else if (lyricsMode === 'spotify') {
     spotifyPanel.classList.remove('hidden');
@@ -287,14 +390,29 @@ function applyLyricsMode() {
     setTimeout(() => {
       const idx = currentLyricIdx >= 0 ? currentLyricIdx : 0;
       const el  = $(`lyric-s-${idx}`);
-      if (el) el.scrollIntoView({ block: 'center' });
+      if (el && !asEnabled) el.scrollIntoView({ block: 'center' });
     }, 50);
   } else {
     modeLabel.textContent = 'OFF';
   }
+
+  // A different panel means different geometry, so any nudge no longer applies
+  asManualOffset = 0;
+  asLastSet      = null;
+  syncAutoscrollPanels();
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
+
+// Vertical-only centering: scrollIntoView would also reset the panel's
+// horizontal scroll, undoing any sideways scroll on wide chord sheets.
+function centerChordSheetSection(el, behavior) {
+  const panel     = $('lyrics-chordify-panel');
+  const panelRect = panel.getBoundingClientRect();
+  const elRect    = el.getBoundingClientRect();
+  const delta     = (elRect.top - panelRect.top) - (panel.clientHeight - elRect.height) / 2;
+  panel.scrollTo({ top: panel.scrollTop + delta, behavior });
+}
 
 function renderChordsPlusLyrics() {
   const panel     = $('lyrics-chordify-panel');
@@ -388,6 +506,7 @@ function lyricSpotifyClass(idx, activeIdx) {
 
 export function updateLyricIdx(t) {
   if (!lyricsMode) return;
+  if (asEnabled) applyAutoscroll(t);
   const tAhead = t + LYRIC_OFFSET_SEC;
 
   if (lyricsMode === 'chordify' && parsedChordSheet) {
@@ -433,7 +552,8 @@ function updateChordSheetDisplay(prevIdx, newIdx) {
     const el = $(`cs-${newIdx}`);
     if (el) {
       el.classList.add('cs-active');
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Autoscroll owns the scroll position while it runs — highlight only
+      if (!asEnabled) centerChordSheetSection(el, 'smooth');
     }
     let j = newIdx + 1;
     while (j < parsedChordSheet.length && parsedChordSheet[j].time === null) {
@@ -456,7 +576,7 @@ function updateLyricDisplay(prevIdx, newIdx) {
       const el = $(`lyric-s-${i}`);
       if (el) el.className = lyricSpotifyClass(i, newIdx);
     });
-    if (newIdx >= 0) {
+    if (newIdx >= 0 && !asEnabled) {
       const el = $(`lyric-s-${newIdx}`);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }

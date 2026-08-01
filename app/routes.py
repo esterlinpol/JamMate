@@ -91,13 +91,7 @@ class JobPatch(BaseModel):
     beat_offset: Optional[float] = None
     bar_offset: Optional[int] = None
     chord_sheet: Optional[str] = None
-
-
-class ChordCreate(BaseModel):
-    name: str
-    frets: str
-    fingers: str
-    barre: Optional[str] = None
+    scroll_speed: Optional[int] = None
 
 
 class SettingsPatch(BaseModel):
@@ -143,6 +137,9 @@ async def patch_job(job_id: str, patch: JobPatch):
     updates = {k: v for k, v in patch.model_dump().items() if v is not None}
     if not updates:
         return {"ok": True}
+    # Also covers a sheet pasted straight off the Cifra Club page
+    if "chord_sheet" in updates:
+        updates["chord_sheet"] = strip_cifra_ads(updates["chord_sheet"])
     updates["updated_at"] = time.time()
     cols = ", ".join(f"{k} = ?" for k in updates)
     vals = list(updates.values()) + [job_id]
@@ -172,7 +169,7 @@ async def delete_job(job_id: str):
 async def get_stems(job_id: str):
     with db() as conn:
         row = conn.execute(
-            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec, song_chord_data, bpm, beat_times, beat_offset, bar_offset, chord_sheet FROM jobs WHERE id = ?",
+            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec, song_chord_data, bpm, beat_times, beat_offset, bar_offset, chord_sheet, scroll_speed FROM jobs WHERE id = ?",
             (job_id,)
         ).fetchone()
     if not row:
@@ -199,6 +196,7 @@ async def get_stems(job_id: str):
         "beat_offset": row["beat_offset"] or 0,
         "bar_offset": row["bar_offset"] or 0,
         "chord_sheet": row["chord_sheet"],
+        "scroll_speed": row["scroll_speed"] or 100,
     }
 
 
@@ -342,46 +340,7 @@ async def add_youtube(
     return {"job_id": job_id}
 
 
-# ── Chord Library ────────────────────────────────────────────────────────────
-
-@router.get("/api/chords")
-async def list_chords():
-    with db() as conn:
-        rows = conn.execute("SELECT * FROM chords ORDER BY name ASC").fetchall()
-    return [dict(r) for r in rows]
-
-
-@router.post("/api/chords")
-async def create_chord(chord: ChordCreate):
-    chord_id = str(uuid.uuid4())
-    now = time.time()
-    with db() as conn:
-        conn.execute(
-            "INSERT INTO chords (id, name, frets, fingers, barre, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (chord_id, chord.name.strip(), chord.frets, chord.fingers, chord.barre, now, now),
-        )
-    return {"id": chord_id}
-
-
-@router.get("/api/chords/{chord_id}")
-async def get_chord(chord_id: str):
-    with db() as conn:
-        row = conn.execute("SELECT * FROM chords WHERE id = ?", (chord_id,)).fetchone()
-    if not row:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return dict(row)
-
-
-@router.put("/api/chords/{chord_id}")
-async def update_chord(chord_id: str, chord: ChordCreate):
-    now = time.time()
-    with db() as conn:
-        conn.execute(
-            "UPDATE chords SET name = ?, frets = ?, fingers = ?, barre = ?, updated_at = ? WHERE id = ?",
-            (chord.name.strip(), chord.frets, chord.fingers, chord.barre, now, chord_id),
-        )
-    return {"ok": True}
-
+# ── BPM detection ─────────────────────────────────────────────────────────────
 
 @router.post("/api/jobs/{job_id}/detect-bpm")
 async def detect_bpm(job_id: str):
@@ -442,14 +401,111 @@ async def detect_bpm(job_id: str):
     return {"bpm": bpm, "beat_count": len(beat_times), "beat_times": beat_times}
 
 
-@router.delete("/api/chords/{chord_id}")
-async def delete_chord(chord_id: str):
+# ── Lyrics (LRCLIB) ───────────────────────────────────────────────────────────
+# The worker fetches lyrics once during processing, so a transient failure there
+# used to leave a song with no lyrics and no way to ask again. This endpoint is
+# that second chance, and it retries transient failures itself.
+
+_LRCLIB_HEADERS = {"User-Agent": "JamMate/1.0 (local practice app)"}
+_LYRICS_ATTEMPTS = 3
+_LYRICS_BACKOFF = (0.6, 1.5)   # seconds to wait before attempt 2 and attempt 3
+
+
+def _lrclib_get(url: str, params: dict):
+    req = urllib.request.Request(
+        f"{url}?{urllib.parse.urlencode(params)}", headers=_LRCLIB_HEADERS
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _lrclib_pick(data) -> Optional[tuple]:
+    """Best result from an LRCLIB response: synced lyrics win over plain ones."""
+    items = [i for i in (data if isinstance(data, list) else [data]) if isinstance(i, dict)]
+    for item in items:
+        if item.get("syncedLyrics"):
+            return item["syncedLyrics"], "lrclib"
+    for item in items:
+        if item.get("plainLyrics"):
+            return item["plainLyrics"], "lrclib-plain"
+    return None
+
+
+def _lrclib_lookup(title: str, artist: str, duration) -> Optional[tuple]:
+    """(lyrics, source) or None if nothing matched. Raises on network failure."""
+    endpoints = []
+    if duration:
+        endpoints.append(("https://lrclib.net/api/get", {
+            "track_name": title, "artist_name": artist, "duration": round(duration),
+        }))
+    endpoints.append(("https://lrclib.net/api/search", {
+        "track_name": title, "artist_name": artist,
+    }))
+
+    last_error = None
+    for url, params in endpoints:
+        for attempt in range(1, _LYRICS_ATTEMPTS + 1):
+            try:
+                data = _lrclib_get(url, params)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    break                      # a genuine miss — try the next endpoint
+                last_error = f"HTTP {e.code}"
+            except Exception as e:             # timeout, DNS, malformed JSON
+                last_error = str(e) or e.__class__.__name__
+            else:
+                found = _lrclib_pick(data)
+                if found:
+                    return found
+                break                          # answered, nothing usable — next endpoint
+            if attempt < _LYRICS_ATTEMPTS:
+                time.sleep(_LYRICS_BACKOFF[attempt - 1])
+
+    if last_error:
+        raise RuntimeError(last_error)
+    return None
+
+
+# Deliberately sync: FastAPI runs it in a threadpool, so the retry sleeps can't
+# stall audio streaming for the player that asked for it.
+@router.post("/api/jobs/{job_id}/fetch-lyrics")
+def fetch_lyrics(job_id: str):
     with db() as conn:
-        row = conn.execute("SELECT id FROM chords WHERE id = ?", (chord_id,)).fetchone()
-        if not row:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        conn.execute("DELETE FROM chords WHERE id = ?", (chord_id,))
-    return {"ok": True}
+        row = conn.execute(
+            "SELECT title, artist, duration_sec FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    if not row:
+        return JSONResponse({"error": "job not found"}, status_code=404)
+
+    title = (row["title"] or "").strip()
+    if not title:
+        return JSONResponse(
+            {"error": "This song has no title to search with — add one first."},
+            status_code=422,
+        )
+
+    try:
+        found = _lrclib_lookup(title, (row["artist"] or "").strip(), row["duration_sec"])
+    except Exception as e:
+        return JSONResponse({"error": f"Could not reach LRCLIB: {e}"}, status_code=502)
+
+    if not found:
+        return JSONResponse(
+            {"error": f'No lyrics on LRCLIB for "{title}" — use autoscroll instead.'},
+            status_code=404,
+        )
+
+    chord_data, chord_source = found
+    with db() as conn:
+        conn.execute(
+            "UPDATE jobs SET chord_data = ?, chord_source = ?, updated_at = ? WHERE id = ?",
+            (chord_data, chord_source, time.time(), job_id),
+        )
+    return {
+        "chord_data": chord_data,
+        "chord_source": chord_source,
+        "synced": chord_source == "lrclib",
+    }
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -583,6 +639,27 @@ def _cifra_find_url(artist: str, title: str) -> str | None:
     return None
 
 
+# Cifra Club injects inline ad placeholders inside the chord <pre>. The label
+# text lands glued to the front of a chord line ("Continúa después del anuncioE
+# ...G#m"), pushing every chord out of column so it no longer sits above the
+# right syllable. One phrase per site locale — the fetch sends es,pt,en.
+_CIFRA_AD_RE = re.compile(
+    r"Contin[úu]a\s+despu[eé]s\s+del\s+anuncio"      # es
+    r"|Continua\s+depois\s+do\s+an[úu]ncio"           # pt
+    r"|Continues\s+after\s+the\s+ad",                # en
+    re.IGNORECASE,
+)
+
+
+def strip_cifra_ads(text: str) -> str:
+    """Remove Cifra Club's inline ad labels, preserving chord column positions."""
+    if not text:
+        return text
+    cleaned = _CIFRA_AD_RE.sub("", text)
+    # A label that sat on its own line leaves stray spaces behind
+    return "\n".join(l if l.strip() else "" for l in cleaned.split("\n"))
+
+
 def _parse_cifra_page(html_text: str) -> str:
     """Extract chord+lyric text from a Cifra Club song page."""
     parser = _PreExtractor()
@@ -593,7 +670,7 @@ def _parse_cifra_page(html_text: str) -> str:
     best = max(parser.blocks, key=lambda b: len(_CHORD_NAME_RE.findall(b)))
     if not _CHORD_NAME_RE.search(best):
         return ""
-    return best.strip()
+    return strip_cifra_ads(best).strip()
 
 
 @router.post("/api/jobs/{job_id}/fetch-cifra")

@@ -4,11 +4,17 @@
   <h2 class="font-bold text-lg text-[#f0fdf4] mb-4">Add Song</h2>
 
   <div class="flex gap-2 mb-5">
-    <button id="tab-upload" class="flex-1 py-2.5 rounded-xl text-sm font-semibold">Upload MP3</button>
     <button id="tab-youtube" class="flex-1 py-2.5 rounded-xl text-sm font-semibold">YouTube</button>
+    <button id="tab-upload" class="flex-1 py-2.5 rounded-xl text-sm font-semibold">Upload MP3</button>
   </div>
 
-  <div id="panel-upload">
+  <div id="panel-youtube" class="mb-4">
+    <label class="text-xs text-[#86efac] mb-1.5 block">YouTube URL</label>
+    <input id="yt-url" type="url" placeholder="https://www.youtube.com/watch?v=…" />
+    <p id="yt-meta-status" class="hidden text-xs text-[#86efac] mt-1.5 opacity-60"></p>
+  </div>
+
+  <div id="panel-upload" class="hidden">
     <div id="drop-zone"
       class="border-2 border-dashed border-[#1e2e1e] rounded-2xl p-8 text-center mb-4 cursor-pointer active:border-[#22c55e]">
       <svg class="w-8 h-8 mx-auto mb-3 text-[#1e2e1e]" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
@@ -19,12 +25,6 @@
       <input id="file-input" type="file" accept="audio/*" class="hidden">
     </div>
     <div id="file-chosen" class="hidden mb-4 px-3 py-2 bg-[#172017] rounded-xl text-sm text-[#22c55e] border border-[#1e2e1e] truncate"></div>
-  </div>
-
-  <div id="panel-youtube" class="hidden mb-4">
-    <label class="text-xs text-[#86efac] mb-1.5 block">YouTube URL</label>
-    <input id="yt-url" type="url" placeholder="https://www.youtube.com/watch?v=…" />
-    <p id="yt-meta-status" class="hidden text-xs text-[#86efac] mt-1.5 opacity-60"></p>
   </div>
 
   <div class="grid grid-cols-2 gap-3 mb-5">

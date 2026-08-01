@@ -1,29 +1,19 @@
 'use strict';
 
 import {
-  resetPlayer, loadStems, togglePlay, seekTo, touchSeek, seekRelative, doSeek,
-  adjustVolume, toggleMute, toggleFullscreen, toggleStem, soloStem, setPlaybackRate,
+  resetPlayer, loadStems, beginLoad, isStaleLoad, getDuration,
+  togglePlay, seekTo, touchSeek, seekRelative, doSeek,
+  adjustVolume, setVolume, VOL_STEP, toggleMute, toggleFullscreen,
+  toggleStem, soloStem, adjustTempo, setTempoPercent, TEMPO_STEP,
 } from './player.js';
 import {
   resetLyrics, initLyrics, cycleLyricsMode, setLyricsMode, getLyricsMode, setSeekFn,
+  setSongDuration, setAutoscroll, isAutoscrollOn, needsAutoscroll,
+  setAutoscrollSpeed, adjustAutoscrollSpeed, getAutoscrollSpeed, AS_STEP,
 } from './chords.js';
-import {
-  initChordPlay, resetChordPlay, tickChordPlay,
-  toggleDiagrams, adjustTempo,
-  enterEditMode, exitEditMode,
-  clearAllChords, refreshEditList, refreshChordLib,
-  initImportModal, nudgeBeatOffset, nudgeBeatOffsetByBeat, setBarOffset, adjustBpm,
-} from './chord-play.js';
-import {
-  fetchChords, createChord, updateChord, deleteChord, renderChordSVG,
-} from './chord-lib.js';
 
 // Wire lyric seek clicks through to the player
 setSeekFn(doSeek);
-
-// Expose chord tick to player.js via window
-window._tickChordPlay = tickChordPlay;
-window.setPlaybackRate = setPlaybackRate;
 
 const STATUS_COLOR = { done: '#22c55e', processing: '#fbbf24', pending: '#94a3b8', error: '#f87171' };
 const STATUS_LABEL = { done: 'Ready', processing: 'Processing…', pending: 'Queued', error: 'Error' };
@@ -41,22 +31,13 @@ async function api(path, opts = {}) {
 // ── Views ─────────────────────────────────────────────────────────────────────
 
 function showLibrary() {
-  $('library-view').style.display        = '';
-  $('player-view').style.display         = 'none';
-  $('chord-library-view').style.display  = 'none';
+  $('library-view').style.display = '';
+  $('player-view').style.display  = 'none';
 }
 
 function showPlayer() {
-  $('library-view').style.display        = 'none';
-  $('player-view').style.display         = '';
-  $('chord-library-view').style.display  = 'none';
-}
-
-function showChordLibrary() {
-  $('library-view').style.display        = 'none';
-  $('player-view').style.display         = 'none';
-  $('chord-library-view').style.display  = '';
-  refreshChordLibraryView();
+  $('library-view').style.display = 'none';
+  $('player-view').style.display  = '';
 }
 
 // ── Library ───────────────────────────────────────────────────────────────────
@@ -163,6 +144,7 @@ async function confirmDelete(job) {
 async function openPlayer(job) {
   resetPlayer();
   resetLyrics();
+  const load = beginLoad();   // cancels any load still in flight from a previous tap
 
   $('player-title').textContent  = job.title || job.filename || 'Song';
   $('player-artist').textContent = job.artist || '';
@@ -176,15 +158,18 @@ async function openPlayer(job) {
   showPlayer();
 
   try {
-    const data = await api(`/api/stems/${job.id}`);
+    const data = await api(`/api/stems/${job.id}`, { signal: load.signal });
+    if (isStaleLoad(load)) return;
     _currentChordSheet     = data.chord_sheet || '';
     _currentChordSourceUrl = data.chord_source_url || '';
     initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
-    await initChordPlay(job.id, data);
-    applyChordUIState(job.id, data);
-    setChordStripVisible(false);
-    await loadStems(job.id, data.stems || []);
+    applySongMeta(job.id, data);
+    await loadStems(job.id, data.stems || [], load);
+    if (isStaleLoad(load)) return;
+    // duration_sec is missing on older songs — the decoded stems know it anyway
+    setSongDuration(data.duration_sec || getDuration());
   } catch (e) {
+    if (isStaleLoad(load) || e.name === 'AbortError') return;
     $('stem-loading-text').textContent = 'Error: ' + e.message;
   }
 }
@@ -192,8 +177,6 @@ async function openPlayer(job) {
 function closePlayer() {
   resetPlayer();
   resetLyrics();
-  resetChordPlay();
-  exitEditMode();
   closePlayerActions();
   showLibrary();
 }
@@ -201,17 +184,19 @@ function closePlayer() {
 // ── Player Actions Sheet ──────────────────────────────────────────────────────
 
 function openPlayerActions() {
-  const hasLyricsAvailable = !$('lyrics-toggle-btn').classList.contains('hidden');
-  $('lyrics-section').classList.toggle('hidden', !hasLyricsAvailable);
-  updateLyricPills();
-  const volPct = parseInt($('vol-label').textContent) || 100;
-  $('vol-slider').value = volPct;
-  _volSliderPrev = volPct;
-  const tempoPct = parseInt($('tempo-label').textContent) || 100;
-  $('tempo-slider').value = tempoPct;
-  _tempoSliderPrev = tempoPct;
+  refreshLyricsControls();
   $('player-actions-sheet').classList.remove('hidden');
   $('player-actions-backdrop').classList.remove('hidden');
+}
+
+// Both lyrics rows depend on whether the song has anything to show, which a
+// fetch or a sheet edit can change while the sheet is open
+function refreshLyricsControls() {
+  const available = !$('lyrics-toggle-btn').classList.contains('hidden');
+  $('lyrics-section').classList.toggle('hidden', !available);
+  $('autoscroll-section').classList.toggle('hidden', !available);
+  updateLyricPills();
+  updateAutoscrollUI();
 }
 
 function closePlayerActions() {
@@ -233,21 +218,89 @@ function updateLyricPills() {
   }
 }
 
-function setChordStripVisible(visible) {
-  $('chord-strip-wrap').classList.toggle('hidden', !visible);
-  $('chord-tabs-section').classList.toggle('hidden', !visible);
-  const btn = $('chord-strip-toggle');
-  if (!btn) return;
-  btn.classList.toggle('bg-[#14532d]',     visible);
-  btn.classList.toggle('border-[#22c55e]', visible);
-  btn.classList.toggle('text-[#22c55e]',   visible);
-  btn.classList.toggle('bg-[#0d130d]',     !visible);
-  btn.classList.toggle('text-[#86efac]',   !visible);
+// ── Autoscroll ────────────────────────────────────────────────────────────────
+
+let _scrollSaveTimer = null;
+
+// Owns the whole autoscroll row, the way updateVolumeUI/updateTempoUI do
+function updateAutoscrollUI() {
+  const on    = isAutoscrollOn();
+  const speed = getAutoscrollSpeed();
+  $('autoscroll-label').textContent = on ? `${speed}%` : 'OFF';
+  const value = $('autoscroll-toggle');
+  value.classList.toggle('off-normal', on);
+  $('autoscroll-down').disabled = !on;
+  $('autoscroll-up').disabled   = !on;
+}
+
+function toggleAutoscroll() {
+  setAutoscroll(!isAutoscrollOn());
+  updateAutoscrollUI();
+}
+
+function stepAutoscroll(delta) {
+  if (!isAutoscrollOn()) return;
+  adjustAutoscrollSpeed(delta);
+  updateAutoscrollUI();
+  saveScrollSpeed();
+}
+
+// Taps come in bursts — only the settled value is worth a write
+function saveScrollSpeed() {
+  if (!_currentPlayerJobId) return;
+  clearTimeout(_scrollSaveTimer);
+  const jobId = _currentPlayerJobId;
+  const speed = getAutoscrollSpeed();
+  _scrollSaveTimer = setTimeout(() => {
+    api(`/api/jobs/${jobId}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ scroll_speed: speed }),
+    }).catch(e => console.error('save scroll speed:', e));
+  }, 600);
+}
+
+// ── Lyrics fetch ──────────────────────────────────────────────────────────────
+
+async function fetchLyrics() {
+  if (!_currentPlayerJobId) return;
+  const jobId = _currentPlayerJobId;
+  const btn   = $('lyrics-fetch-btn');
+  const label = $('lyrics-fetch-label');
+  btn.disabled      = true;
+  label.textContent = '…';
+  try {
+    const res = await api(`/api/jobs/${jobId}/fetch-lyrics`, { method: 'POST' });
+    if (_currentPlayerJobId !== jobId) return;   // player moved on while we waited
+    const data = await api(`/api/stems/${jobId}`);
+    resetLyrics();
+    initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
+    setSongDuration(data.duration_sec || getDuration());
+    applyAutoscrollDefault(data.scroll_speed);
+    label.textContent = res.synced ? '✓ SYNCED' : '✓ PLAIN';
+    setTimeout(() => { label.textContent = 'Lyrics'; }, 2500);
+  } catch (e) {
+    if (_currentPlayerJobId !== jobId) return;
+    console.error('fetch lyrics:', e);
+    // Stays on RETRY so the tile itself is the retry affordance
+    label.textContent = 'RETRY';
+    alert(e.message);
+  } finally {
+    if (_currentPlayerJobId === jobId) btn.disabled = false;
+  }
+}
+
+// Autoscroll turns itself on for songs with nothing timed to follow — that is
+// the whole point of it, so the user shouldn't have to ask after a failed fetch.
+function applyAutoscrollDefault(savedSpeed) {
+  setAutoscrollSpeed(savedSpeed || 100);
+  setAutoscroll(needsAutoscroll());
+  refreshLyricsControls();
 }
 
 // ── Add Song ──────────────────────────────────────────────────────────────────
 
-let activeTab    = 'upload';
+let activeTab    = 'youtube';   // YouTube is the common path; upload is the fallback
 let selectedFile = null;
 let _ytMetaTimer = null;
 
@@ -260,7 +313,7 @@ function openAddSheet() {
   $('add-error').classList.add('hidden');
   $('yt-meta-status').classList.add('hidden');
   clearTimeout(_ytMetaTimer);
-  switchTab('upload');
+  switchTab('youtube');
   $('sheet').classList.add('open');
   $('sheet-backdrop').classList.add('open');
 }
@@ -353,47 +406,38 @@ async function submitSong() {
   }
 }
 
-// ── Chord UI state helper ─────────────────────────────────────────────────────
+// ── Song meta (BPM badge, action tiles) ───────────────────────────────────────
 
 let _currentPlayerJobId    = null;
 let _currentChordSheet     = '';
 let _currentChordSourceUrl = '';
-let _volSliderPrev      = 100;
-let _tempoSliderPrev    = 100;
 
-function applyChordUIState(jobId, data) {
+function applySongMeta(jobId, data) {
   _currentPlayerJobId = jobId;
-  const hasBeats = !!(data.beat_times);
-  $('chord-strip-toggle').classList.toggle('hidden', !hasBeats);
-  $('chord-diagrams-btn').classList.toggle('hidden', !hasBeats);
-  $('tempo-section').classList.toggle('hidden', !hasBeats);
-  $('chord-detect-btn').classList.remove('hidden');
   $('actions-tile-section').classList.remove('hidden');
   const bpmBadge = $('player-bpm');
   if (data.bpm) {
     bpmBadge.textContent = `${Math.round(data.bpm)} BPM`;
     bpmBadge.classList.remove('hidden');
-    $('chord-detect-label').textContent = `${Math.round(data.bpm)}`;
   } else {
     bpmBadge.classList.add('hidden');
   }
+  applyAutoscrollDefault(data.scroll_speed);
+  $('lyrics-fetch-label').textContent = 'Lyrics';
+  $('lyrics-fetch-btn').disabled = false;
 }
 
 async function detectBPM() {
   if (!_currentPlayerJobId) return;
-  const wasStripVisible = !$('chord-strip-wrap').classList.contains('hidden');
   closePlayerActions();
-  const btn = $('chord-detect-btn');
+  const btn   = $('chord-detect-btn');
   const label = $('chord-detect-label');
   btn.disabled = true;
   label.textContent = '…';
   try {
     const data = await api(`/api/jobs/${_currentPlayerJobId}/detect-bpm`, { method: 'POST' });
-    const stemData = await api(`/api/stems/${_currentPlayerJobId}`);
-    await initChordPlay(_currentPlayerJobId, stemData);
-    applyChordUIState(_currentPlayerJobId, stemData);
-    setChordStripVisible(wasStripVisible);
-    label.textContent = `${Math.round(data.bpm)}`;
+    $('player-bpm').textContent = `${Math.round(data.bpm)} BPM`;
+    $('player-bpm').classList.remove('hidden');
   } catch (e) {
     label.textContent = 'ERR';
     setTimeout(() => { label.textContent = 'BPM'; btn.disabled = false; }, 2000);
@@ -406,6 +450,8 @@ async function detectBPM() {
 // ── Chord sheet modal ─────────────────────────────────────────────────────────
 
 function openChordSheetModal() {
+  // The actions sheet is z-50 and this modal is z-30 — it has to get out of the way
+  closePlayerActions();
   $('chord-sheet-input').value = _currentChordSheet;
   $('cifra-url-input').value   = _currentChordSourceUrl;
   $('cifra-fetch-status').textContent = '';
@@ -430,6 +476,8 @@ async function saveChordSheet() {
     const data = await api(`/api/stems/${_currentPlayerJobId}`);
     resetLyrics();
     initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
+    setSongDuration(data.duration_sec || getDuration());
+    applyAutoscrollDefault(data.scroll_speed);
     closeChordSheetModal();
   } catch (e) {
     alert('Failed to save chord sheet: ' + e.message);
@@ -450,6 +498,8 @@ async function clearChordSheet() {
     const data = await api(`/api/stems/${_currentPlayerJobId}`);
     resetLyrics();
     initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
+    setSongDuration(data.duration_sec || getDuration());
+    applyAutoscrollDefault(data.scroll_speed);
     closeChordSheetModal();
   } catch (e) {
     console.error('clear chord sheet:', e);
@@ -482,327 +532,6 @@ async function fetchCifraSheet() {
   } finally {
     btn.disabled = false;
   }
-}
-
-// ── Chord tabs (Diagrams / Edit) ──────────────────────────────────────────────
-
-function setChordTab(tab) {
-  const diagrams = tab === 'diagrams';
-  $('chord-tab-diagrams').classList.toggle('active', diagrams);
-  $('chord-tab-edit').classList.toggle('active', !diagrams);
-  if (diagrams) {
-    exitEditMode();
-  } else {
-    enterEditMode();
-    refreshEditPickerPanel();
-  }
-}
-
-async function refreshEditPickerPanel() {
-  const picker = $('chord-edit-picker');
-  const searchInput = $('chord-edit-search');
-  if (!picker) return;
-
-  const chords = await fetchChords();
-  const renderPicker = (filter) => {
-    picker.innerHTML = '';
-    chords
-      .filter(c => !filter || c.name.toLowerCase().startsWith(filter.toLowerCase()))
-      .forEach(c => {
-        const chip = document.createElement('button');
-        chip.className = 'chord-picker-chip text-xs px-2 py-1 rounded-lg bg-[#172017] border border-[#1e2e1e] text-[#f0fdf4] hover:border-[#22c55e] transition-all';
-        chip.textContent = c.name;
-        chip.addEventListener('click', () => {
-          // Close any open picker popup and let chord-play.js handle insertion
-          // via the pendingPickerBeat approach — here we just surface the name
-          // for the strip picker by broadcasting a custom event
-          document.dispatchEvent(new CustomEvent('chord-pick', { detail: c.name }));
-        });
-        picker.appendChild(chip);
-      });
-  };
-
-  renderPicker('');
-  if (searchInput) {
-    searchInput.oninput = () => renderPicker(searchInput.value);
-  }
-}
-
-// ── Chord Library View ────────────────────────────────────────────────────────
-
-async function refreshChordLibraryView() {
-  const grid = $('chord-lib-grid');
-  const empty = $('chord-lib-empty');
-  if (!grid) return;
-  grid.innerHTML = '';
-
-  const chords = await fetchChords();
-  if (!chords.length) {
-    empty.classList.remove('hidden');
-    return;
-  }
-  empty.classList.add('hidden');
-
-  chords.forEach(chord => {
-    const card = document.createElement('button');
-    card.className = 'flex flex-col items-center gap-1 p-2 rounded-2xl bg-[#172017] border border-[#1e2e1e] hover:border-[#22c55e] transition-all';
-
-    const svg = renderChordSVG(chord, 'small');
-    card.appendChild(svg);
-
-    const label = document.createElement('span');
-    label.className = 'text-xs text-[#f0fdf4] font-semibold';
-    label.textContent = chord.name;
-    card.appendChild(label);
-
-    card.addEventListener('click', () => openChordEditor(chord));
-    grid.appendChild(card);
-  });
-}
-
-// ── Chord Editor ──────────────────────────────────────────────────────────────
-
-let _editingChord = null;  // null = new chord
-// Fretboard state: 6 strings, each value -1=muted, 0=open, 1-N=fret
-let _edFrets   = [-1, -1, -1, -1, -1, -1];
-let _edFingers = [0, 0, 0, 0, 0, 0];
-
-function openChordEditor(chord = null) {
-  _editingChord = chord;
-  _edFrets   = chord ? JSON.parse(chord.frets) : [-1, -1, -1, -1, -1, -1];
-  _edFingers = chord ? JSON.parse(chord.fingers) : [0, 0, 0, 0, 0, 0];
-
-  $('chord-editor-title').textContent = chord ? 'Edit Chord' : 'New Chord';
-  $('chord-editor-name').value = chord?.name || '';
-  $('chord-editor-delete').classList.toggle('hidden', !chord);
-
-  const barre = chord?.barre ? JSON.parse(chord.barre) : null;
-  $('chord-editor-barre-on').checked = !!barre;
-  $('chord-editor-barre-opts').classList.toggle('hidden', !barre);
-  if (barre) {
-    $('chord-editor-barre-fret').value = barre.fret;
-    $('chord-editor-barre-from').value = barre.from;
-    $('chord-editor-barre-to').value   = barre.to;
-  }
-
-  renderEditorFretboard();
-  renderEditorPreview();
-
-  $('chord-editor-panel').classList.remove('hidden');
-  $('chord-editor-backdrop').classList.remove('hidden');
-}
-
-function closeChordEditor() {
-  $('chord-editor-panel').classList.add('hidden');
-  $('chord-editor-backdrop').classList.add('hidden');
-  _editingChord = null;
-}
-
-function getBarreFromEditor() {
-  if (!$('chord-editor-barre-on').checked) return null;
-  return {
-    fret: parseInt($('chord-editor-barre-fret').value) || 1,
-    from: parseInt($('chord-editor-barre-from').value) || 0,
-    to:   parseInt($('chord-editor-barre-to').value)   || 5,
-  };
-}
-
-function renderEditorStringTops() {
-  const container = $('chord-editor-string-tops');
-  if (!container) return;
-  container.innerHTML = '';
-  const labels = ['E', 'A', 'D', 'G', 'B', 'e'];
-  for (let s = 0; s < 6; s++) {
-    const btn = document.createElement('button');
-    const f = _edFrets[s];
-    btn.className = 'flex-1 text-center text-xs py-1 rounded transition-colors';
-    btn.textContent = f === -1 ? '✕' : '○';
-    btn.style.color = f === -1 ? '#f87171' : '#86efac';
-    btn.title = labels[s];
-    btn.addEventListener('click', () => {
-      _edFrets[s] = f === -1 ? 0 : -1;
-      if (_edFrets[s] === -1) _edFingers[s] = 0;
-      renderEditorStringTops();
-      renderEditorFretboard();
-      renderEditorPreview();
-    });
-    container.appendChild(btn);
-  }
-}
-
-function renderEditorFretboard() {
-  const board = $('chord-editor-fretboard');
-  if (!board) return;
-  board.innerHTML = '';
-
-  const strings = 6, frets = 5;
-  const VW = 300, VH = 200;
-  const dotR = 13;
-  const padL = dotR + 2, padR = dotR + 2;
-  const topPad = 40;   // toggle symbol area above nut
-  const nutH = 6;
-  const bottomPad = 10;
-  const gridW = VW - padL - padR;
-  const sGap = gridW / (strings - 1);
-  const fretAreaH = VH - topPad - nutH - bottomPad;
-  const fGap = fretAreaH / frets;
-
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${VW} ${VH}`);
-  svg.style.width = '100%';
-  svg.style.display = 'block';
-  svg.style.touchAction = 'none';
-
-  function el(tag, attrs, parent) {
-    const e = document.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-    if (parent) parent.appendChild(e);
-    return e;
-  }
-
-  // String toggle symbols (○ / ✕) above nut
-  for (let s = 0; s < strings; s++) {
-    const cx = padL + s * sGap;
-    const f = _edFrets[s];
-    el('text', {
-      x: cx, y: topPad * 0.48,
-      'font-size': 15,
-      fill: f === -1 ? '#f87171' : '#86efac',
-      'text-anchor': 'middle',
-      'dominant-baseline': 'middle',
-      'font-family': 'monospace',
-    }, svg).textContent = f === -1 ? '✕' : '○';
-  }
-
-  // Nut bar
-  el('rect', {
-    x: padL, y: topPad,
-    width: gridW, height: nutH,
-    fill: '#86efac',
-  }, svg);
-
-  // Fret lines
-  for (let f = 0; f <= frets; f++) {
-    const y = topPad + nutH + f * fGap;
-    el('line', {
-      x1: padL, y1: y, x2: padL + gridW, y2: y,
-      stroke: '#2d4a2d', 'stroke-width': 1,
-    }, svg);
-  }
-
-  // String lines
-  for (let s = 0; s < strings; s++) {
-    const x = padL + s * sGap;
-    el('line', {
-      x1: x, y1: topPad + nutH,
-      x2: x, y2: topPad + nutH + frets * fGap,
-      stroke: '#4ade80', 'stroke-width': 1,
-    }, svg);
-  }
-
-  // Finger dots
-  for (let s = 0; s < strings; s++) {
-    const f = _edFrets[s];
-    if (f <= 0) continue;
-    const cx = padL + s * sGap;
-    const cy = topPad + nutH + (f - 1) * fGap + fGap * 0.5;
-    el('circle', { cx, cy, r: dotR, fill: '#22c55e' }, svg);
-    if (_edFingers[s]) {
-      el('text', {
-        x: cx, y: cy,
-        'font-size': dotR * 1.1,
-        fill: '#0a0f0a',
-        'text-anchor': 'middle',
-        'dominant-baseline': 'middle',
-        'font-weight': 'bold',
-        'font-family': 'monospace',
-      }, svg).textContent = _edFingers[s];
-    }
-  }
-
-  // Tap / click handler
-  svg.addEventListener('pointerdown', e => {
-    const rect = svg.getBoundingClientRect();
-    const scaleX = VW / rect.width;
-    const scaleY = VH / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
-
-    let s = Math.round((x - padL) / sGap);
-    s = Math.max(0, Math.min(strings - 1, s));
-
-    if (y < topPad) {
-      // Toggle symbol area → cycle open ↔ muted
-      _edFrets[s] = _edFrets[s] === -1 ? 0 : -1;
-      if (_edFrets[s] === -1) _edFingers[s] = 0;
-    } else {
-      const fretFloat = (y - topPad - nutH) / fGap;
-      let f = Math.floor(fretFloat) + 1;
-      f = Math.max(1, Math.min(frets, f));
-
-      if (_edFrets[s] === f) {
-        // Tap existing dot → cycle finger number 1-4, then remove
-        if (_edFingers[s] >= 4) {
-          _edFrets[s] = 0;
-          _edFingers[s] = 0;
-        } else {
-          _edFingers[s] = _edFingers[s] + 1;
-        }
-      } else {
-        _edFrets[s] = f;
-        _edFingers[s] = 0;
-      }
-    }
-
-    renderEditorFretboard();
-    renderEditorPreview();
-  });
-
-  board.appendChild(svg);
-}
-
-function renderEditorPreview() {
-  const preview = $('chord-editor-preview');
-  if (!preview) return;
-  preview.innerHTML = '';
-  const barre = getBarreFromEditor();
-  const chord = {
-    name: $('chord-editor-name')?.value || '',
-    frets:   JSON.stringify(_edFrets),
-    fingers: JSON.stringify(_edFingers),
-    barre:   barre ? JSON.stringify(barre) : null,
-  };
-  preview.appendChild(renderChordSVG(chord, 'large'));
-}
-
-async function saveChordEditor() {
-  const name = $('chord-editor-name').value.trim();
-  if (!name) { alert('Please enter a chord name'); return; }
-  const barre = getBarreFromEditor();
-  const payload = {
-    name,
-    frets:   JSON.stringify(_edFrets),
-    fingers: JSON.stringify(_edFingers),
-    barre:   barre ? JSON.stringify(barre) : null,
-  };
-  if (_editingChord) {
-    await updateChord(_editingChord.id, payload);
-  } else {
-    await createChord(payload);
-  }
-  closeChordEditor();
-  refreshChordLibraryView();
-  await refreshChordLib();
-}
-
-async function deleteChordFromEditor() {
-  if (!_editingChord) return;
-  if (!confirm(`Delete chord "${_editingChord.name}"?`)) return;
-  await deleteChord(_editingChord.id);
-  closeChordEditor();
-  refreshChordLibraryView();
-  await refreshChordLib();
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -897,7 +626,6 @@ function startPolling() {
 $('btn-refresh').addEventListener('click', refreshLibrary);
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-add').addEventListener('click', openAddSheet);
-$('btn-chords').addEventListener('click', showChordLibrary);
 
 // Player header
 $('btn-back').addEventListener('click', closePlayer);
@@ -905,28 +633,16 @@ $('btn-fullscreen').addEventListener('click', toggleFullscreen);
 $('btn-player-actions').addEventListener('click', openPlayerActions);
 $('player-actions-backdrop').addEventListener('click', closePlayerActions);
 
-// Actions sheet — volume
+// Actions sheet — volume stepper
 $('vol-btn').addEventListener('click', toggleMute);
-$('vol-slider').addEventListener('input', e => {
-  const newVal = parseInt(e.target.value);
-  const delta = (newVal - _volSliderPrev) / 100;
-  _volSliderPrev = newVal;
-  adjustVolume(delta);
-});
+$('vol-down').addEventListener('click',  () => adjustVolume(-VOL_STEP));
+$('vol-up').addEventListener('click',    () => adjustVolume(VOL_STEP));
+$('vol-reset').addEventListener('click', () => setVolume(1));
 
-// Actions sheet — tempo
-$('tempo-slider').addEventListener('input', e => {
-  const newVal = parseInt(e.target.value);
-  const delta = newVal - _tempoSliderPrev;
-  _tempoSliderPrev = newVal;
-  if (delta !== 0) adjustTempo(delta);
-});
-
-// Actions sheet — chord strip toggle
-$('chord-strip-toggle').addEventListener('click', () => {
-  const isVisible = !$('chord-strip-wrap').classList.contains('hidden');
-  setChordStripVisible(!isVisible);
-});
+// Actions sheet — tempo stepper
+$('tempo-down').addEventListener('click',  () => adjustTempo(-TEMPO_STEP));
+$('tempo-up').addEventListener('click',    () => adjustTempo(TEMPO_STEP));
+$('tempo-reset').addEventListener('click', () => setTempoPercent(100));
 
 // Actions sheet — lyrics
 $('lyrics-pill-off').addEventListener('click',      () => { setLyricsMode(null);        updateLyricPills(); closePlayerActions(); });
@@ -957,6 +673,12 @@ $('add-btn').addEventListener('click',       submitSong);
 // Chord detect BPM
 $('chord-detect-btn').addEventListener('click', detectBPM);
 
+// Lyrics fetch + autoscroll fallback
+$('lyrics-fetch-btn').addEventListener('click',   fetchLyrics);
+$('autoscroll-toggle').addEventListener('click',  toggleAutoscroll);
+$('autoscroll-down').addEventListener('click',    () => stepAutoscroll(-AS_STEP));
+$('autoscroll-up').addEventListener('click',      () => stepAutoscroll(AS_STEP));
+
 // Chord sheet modal
 $('chord-sheet-open-btn').addEventListener('click', openChordSheetModal);
 $('chord-sheet-close').addEventListener('click',    closeChordSheetModal);
@@ -964,38 +686,6 @@ $('chord-sheet-cancel').addEventListener('click',   closeChordSheetModal);
 $('chord-sheet-save').addEventListener('click',     saveChordSheet);
 $('chord-sheet-clear-btn').addEventListener('click', clearChordSheet);
 $('cifra-fetch-btn').addEventListener('click',      fetchCifraSheet);
-
-// Chord tabs + strip controls
-$('chord-tab-diagrams').addEventListener('click', () => { setChordStripVisible(true); setChordTab('diagrams'); closePlayerActions(); });
-$('chord-tab-edit').addEventListener('click',     () => { setChordStripVisible(true); setChordTab('edit');     closePlayerActions(); });
-$('chord-diagrams-btn').addEventListener('click', toggleDiagrams);
-$('chord-edit-clear').addEventListener('click', () => { if (confirm('Clear all chords?')) clearAllChords(); });
-$('beat-nudge-beat-back').addEventListener('click', () => nudgeBeatOffsetByBeat(-1));
-$('beat-nudge-back').addEventListener('click',      () => nudgeBeatOffset(-0.025));
-$('beat-nudge-fwd').addEventListener('click',       () => nudgeBeatOffset(+0.025));
-$('beat-nudge-beat-fwd').addEventListener('click',  () => nudgeBeatOffsetByBeat(+1));
-$('bpm-nudge-down').addEventListener('click', () => adjustBpm(-0.1));
-$('bpm-nudge-up').addEventListener('click',   () => adjustBpm(+0.1));
-document.querySelectorAll('.bar-offset-btn').forEach(btn =>
-  btn.addEventListener('click', () => setBarOffset(parseInt(btn.dataset.offset)))
-);
-initImportModal();
-
-// Chord library
-$('chord-lib-back').addEventListener('click', showLibrary);
-$('chord-lib-add').addEventListener('click',  () => openChordEditor(null));
-
-// Chord editor
-$('chord-editor-cancel').addEventListener('click', closeChordEditor);
-$('chord-editor-save').addEventListener('click',   saveChordEditor);
-$('chord-editor-delete').addEventListener('click',   deleteChordFromEditor);
-$('chord-editor-barre-on').addEventListener('change', () => {
-  $('chord-editor-barre-opts').classList.toggle('hidden', !$('chord-editor-barre-on').checked);
-  renderEditorPreview();
-});
-['chord-editor-barre-fret', 'chord-editor-barre-from', 'chord-editor-barre-to'].forEach(id => {
-  $( id ).addEventListener('input', renderEditorPreview);
-});
 
 // Settings
 $('settings-backdrop').addEventListener('click', closeSettings);

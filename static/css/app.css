@@ -15,6 +15,17 @@ html, body { height: 100%; margin: 0; background: #0a0f0a; color: #f0fdf4;
   user-select: none; -webkit-user-select: none;
 }
 .stem-btn.muted { opacity: 0.25; }
+/* Stem still downloading/decoding — inert, no colour claim yet */
+.stem-btn.stem-pending {
+  color: #86efac; border-color: #1e2e1e; background: transparent;
+  cursor: default; animation: stem-pulse 1.2s ease-in-out infinite;
+}
+@keyframes stem-pulse { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.45; } }
+/* Stem gave up after its retries — tap to try again */
+.stem-btn.stem-failed {
+  opacity: 1; color: #f87171; border-color: #f87171;
+  background: rgba(248, 113, 113, 0.08); cursor: pointer;
+}
 
 #progress-bar { height: 6px; background: #1e2e1e; border-radius: 3px; cursor: pointer; position: relative; }
 #progress-fill { height: 100%; background: #22c55e; border-radius: 3px; width: 0%; pointer-events: none; }
@@ -58,39 +69,57 @@ button { touch-action: manipulation; }
 button:active { transform: scale(0.96); }
 .no-scale:active { transform: none; }
 
-#lyrics-chordify-panel { scroll-behavior: smooth; }
+#lyrics-chordify-panel { scroll-behavior: smooth; overflow-x: auto; }
+/* Autoscroll writes a position every frame — smooth scrolling would animate each
+   write and lag behind. ID+class so it outranks the smooth rule above. */
+#lyrics-chordify-panel.as-active,
+#lyrics-spotify-panel.as-active { scroll-behavior: auto; }
 #lyrics-chordify-content p { transition: opacity 0.2s, color 0.2s; }
 
 /* ── Chord sheet (Chords + Lyrics) view ────────────────────────────────────── */
-.cs-section { margin-bottom: 0.75rem; }
-.cs-chord-line {
-  font-family: monospace;
-  font-size: 0.72rem;
-  color: #4b5563;
-  margin: 0;
+/* Chord and lyric lines share one monospace size so chords sit on the correct
+   column of the lyric below. Tune both at once with --cs-font-size. */
+:root { --cs-font-size: 1.05rem; }
+@media (max-width: 640px) { :root { --cs-font-size: 0.9rem; } }
+
+.cs-section {
+  margin-bottom: 0.9rem;
+  border-left: 2px solid transparent;
+  padding-left: 0.5rem;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+.cs-chord-line, .cs-lyric-line {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--cs-font-size);
+  line-height: 1.45;
   white-space: pre;
-  line-height: 1.5;
+  margin: 0;
+  padding: 0;
+}
+.cs-chord-line {
+  color: #4b5563;
   background: transparent;
   border: none;
-  padding: 0;
 }
 .cs-chord-name { color: #f97316; font-weight: 700; }
 .cs-lyric-line {
-  margin: 0;
   color: #86efac;
   opacity: 0.55;
-  font-size: 1rem;
-  line-height: 1.4;
   transition: opacity 0.2s, color 0.2s;
+}
+/* Active highlight uses colour only — changing weight or padding would shift
+   the lyric horizontally and break chord alignment. */
+.cs-section.cs-active {
+  border-left-color: #22c55e;
+  background: rgba(34, 197, 94, 0.06);
 }
 .cs-section.cs-active .cs-lyric-line {
   color: #f0fdf4;
-  font-weight: 600;
   opacity: 1;
 }
-.cs-section.cs-active .cs-chord-line { color: #6b7280; }
+.cs-section.cs-active .cs-chord-line { color: #9ca3af; }
 .cs-section-label {
-  font-size: 0.6rem;
+  font-size: 0.75rem;
   font-weight: 700;
   color: #4ade80;
   opacity: 0.45;
@@ -100,7 +129,7 @@ button:active { transform: scale(0.96); }
   padding: 0;
 }
 .cs-metadata-line {
-  font-size: 0.65rem;
+  font-size: 0.8rem;
   color: #4b5563;
   margin: 0 0 0.25rem;
   padding: 0;
@@ -113,306 +142,42 @@ button:active { transform: scale(0.96); }
   mask-image:         linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%);
 }
 
-/* ── Chord views ───────────────────────────────────────────────────────────── */
-
-@media (orientation: portrait) {
-  #chord-library-view { display: flex; flex-direction: column; height: 100svh; }
-}
-@media (orientation: landscape) {
-  #chord-library-view { display: flex; flex-direction: column; height: 100dvh; }
-}
-
-/* ── Beat strip ────────────────────────────────────────────────────────────── */
-
-#chord-strip {
-  display: flex;
-  align-items: stretch;
-  overflow-x: hidden;
-  scroll-behavior: auto;
-  position: relative;
-}
-
-.beat-box {
-  display: inline-flex;
-  flex-direction: column;
-  position: relative;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 52px;
-  height: 64px;
-  padding: 4px;
-  font-size: 1.05rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: #86efac;
-  background: #0d130d;
-  border-right: 1px solid #1e2e1e;
-  cursor: pointer;
-  user-select: none;
-  touch-action: manipulation;
-  transition: background 0.1s, border-color 0.1s, color 0.1s;
-}
-
-.beat-box.active {
-  background: #14532d;
-  border-left: 2px solid #22c55e;
-  border-right: 1px solid #22c55e;
-  color: #f0fdf4;
-}
-
-.beat-box.past   { opacity: 0.35; }
-.beat-box.future { opacity: 0.75; }
-
-/* Bar-start: strong left border on beat 1 of each measure */
-.beat-box.bar-start {
-  border-left: 2px solid #4ade80;
-}
-.beat-box.bar-start.active {
-  border-left: 2px solid #22c55e;
-}
-
-/* Chord name inside beat box */
-.beat-box .beat-chord {
-  display: block;
-  text-transform: uppercase;
-  line-height: 1;
-}
-
-/* Beat position number 1–4 stacked below chord name */
-.beat-box .beat-num {
-  font-size: 0.55rem;
-  font-weight: 500;
-  color: #4ade80;
-  opacity: 0.5;
-  line-height: 1;
-  pointer-events: none;
-}
-
-/* Bar offset selector buttons */
-.bar-offset-btn {
-  width: 1.4rem;
-  height: 1.4rem;
-  font-size: 0.6rem;
-  font-weight: 700;
-  border-radius: 4px;
-  border: 1px solid #1e2e1e;
-  background: transparent;
-  color: #86efac;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.1s, color 0.1s;
-}
-.bar-offset-btn:hover { background: #1e2e1e; }
-.bar-offset-btn.active { background: #14532d; color: #f0fdf4; border-color: #22c55e; }
-
-#chord-strip[data-editing] .beat-box:hover {
-  background: #1e2e1e;
-  border-color: #22c55e;
-}
-
-/* ── Chord diagram row ─────────────────────────────────────────────────────── */
-
-#chord-diagram-row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-behavior: smooth;
-  padding: 10px 12px;
-  gap: 10px;
-  max-height: 260px;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
-}
-
-.chord-diagram-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 4px 4px;
-  border-radius: 10px;
-  border: 1px solid #1e2e1e;
-  background: #111811;
-  cursor: pointer;
-  transition: border-color 0.2s, opacity 0.15s;
-  flex-shrink: 0;
-}
-
-.chord-diagram-card:hover { border-color: #22c55e; }
-
-.chord-diagram-card.current {
-  border-color: #22c55e;
-  background: #172017;
-  box-shadow: 0 0 0 1px rgba(34,197,94,0.3), 0 4px 16px rgba(34,197,94,0.15);
-}
-
-.chord-diagram-card.past     { opacity: 0.45; }
-.chord-diagram-card.upcoming { opacity: 0.8; }
-
-.chord-diagram-card span {
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: #f0fdf4;
-  text-align: center;
-}
-
-.chord-diagram-card.current span {
-  font-size: 0.85rem;
-  color: #22c55e;
-}
-
-.chord-diagram-placeholder {
-  width: 90px; height: 110px;
-  display: flex; align-items: center; justify-content: center;
-  color: #1e2e1e; font-size: 1.5rem;
-}
-
-/* ── Chord tabs ────────────────────────────────────────────────────────────── */
-
-.chord-tab {
-  background: #172017;
-  color: #86efac;
-  transition: background 0.15s, color 0.15s;
-}
-.chord-tab.active {
-  background: #22c55e;
-  color: #0a0f0a;
-  border-color: #22c55e;
-}
-
-/* ── Chord edit panel ──────────────────────────────────────────────────────── */
-
-.chord-edit-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 4px;
-  border-radius: 6px;
-  transition: background 0.1s;
-}
-.chord-edit-row:hover { background: #172017; }
-
-.chord-edit-time {
-  font-size: 0.6rem;
-  font-family: monospace;
-  color: #86efac;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.chord-edit-time:hover { color: #22c55e; }
-
-.chord-edit-name {
-  flex: 1;
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: #f0fdf4;
-}
-
-.chord-edit-del {
-  font-size: 0.6rem;
-  color: #f87171;
-  opacity: 0.5;
-  padding: 2px 4px;
-  transition: opacity 0.15s;
-}
-.chord-edit-del:hover { opacity: 1; }
-
-/* ── Chord picker popup ────────────────────────────────────────────────────── */
-
-#chord-picker-popup {
-  position: absolute;
-  top: 4px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #111811;
-  border: 1px solid #22c55e;
-  border-radius: 12px;
-  padding: 8px;
-  z-index: 100;
-  min-width: 200px;
-  max-width: 90%;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-}
-
-.chord-picker-input {
-  width: 100%;
-  background: #172017;
-  border: 1px solid #1e2e1e;
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 0.75rem;
-  color: #f0fdf4;
-  outline: none;
-  margin-bottom: 6px;
-}
-.chord-picker-input:focus { border-color: #22c55e; }
-
-.chord-picker-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-height: 100px;
-  overflow-y: auto;
-}
-
-.chord-picker-chip {
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: #172017;
-  border: 1px solid #1e2e1e;
-  color: #f0fdf4;
-  font-size: 0.65rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: border-color 0.1s, background 0.1s;
-}
-.chord-picker-chip:hover { border-color: #22c55e; background: #1e2e1e; }
-
-.chord-picker-cancel {
-  position: absolute;
-  top: 6px; right: 8px;
-  font-size: 0.75rem;
-  color: #86efac;
-  opacity: 0.5;
-  padding: 2px 4px;
-  transition: opacity 0.1s;
-}
-.chord-picker-cancel:hover { opacity: 1; }
-
-/* ── Actions sheet — sliders & tiles ───────────────────────────────────────── */
-
-.actions-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  background: #1e2e1e;
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-.actions-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #22c55e;
-  cursor: pointer;
-  box-shadow: 0 0 0 4px rgba(34,197,94,0.15);
-}
-.actions-slider::-moz-range-thumb {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #22c55e;
-  cursor: pointer;
-  border: none;
-  box-shadow: 0 0 0 4px rgba(34,197,94,0.15);
-}
+/* ── Actions sheet — tiles ─────────────────────────────────────────────────── */
 
 .actions-tile:disabled { opacity: 0.45; }
+
+/* ── Steppers (volume, tempo) ──────────────────────────────────────────────── */
+.step-btn {
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: #0d130d;
+  border: 1px solid #1e2e1e;
+  color: #86efac;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.step-btn:active { background: #22c55e; border-color: #22c55e; color: #0a0f0a; }
+.step-btn:disabled { opacity: 0.3; }
+.step-btn:disabled:active { background: #0d130d; border-color: #1e2e1e; color: #86efac; }
+.step-value {
+  flex-shrink: 0;
+  min-width: 3.25rem;
+  padding: 0.35rem 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #86efac;
+  opacity: 0.7;
+  transition: color 0.15s, opacity 0.15s;
+}
+/* Off-normal tempo is worth noticing — it changes how everything sounds */
+.step-value.off-normal { color: #22c55e; opacity: 1; }
+/* Muted reads as a fault state, not a setting */
+.step-value.muted { color: #f87171; opacity: 1; }

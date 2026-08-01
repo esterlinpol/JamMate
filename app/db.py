@@ -90,6 +90,8 @@ def init_db():
             ("beat_offset", "REAL NOT NULL DEFAULT 0"),
             ("bar_offset", "INTEGER NOT NULL DEFAULT 0"),
             ("chord_sheet", "TEXT"),
+            # % of "scroll the sheet to the end exactly as the song finishes"
+            ("scroll_speed", "INTEGER NOT NULL DEFAULT 100"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")
