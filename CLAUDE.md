@@ -211,8 +211,25 @@ removed (see git history before this commit if they need to come back).
   it is then paired with the next non-chord line as its lyric
 - **Column positions are load-bearing**: chord lines keep their original spacing and lyric
   lines are only `trimEnd()`ed, so a chord sits above the right syllable. Both render
-  monospace at the same `--cs-font-size` with `white-space: pre` (the panel scrolls
-  horizontally rather than wrapping, which would desync the columns)
+  monospace at the same `--cs-font-size` with `white-space: pre`
+- **Paired wrapping** (`wrapPair()` in `chords.js`) keeps long lines on screen. CSS
+  wrapping can't be used — `pre-wrap` breaks the chord line and the lyric line at
+  different widths and slides every chord off its syllable. Instead both halves of a
+  pair are cut at the *same* column, chosen by `safeBreak()` so it lands neither inside
+  a chord token nor inside a word; only the indent the two continuations share is
+  trimmed. Segments render as extra `<pre>`/`<p>` pairs **inside the same
+  `.cs-section`** wrapper, so `assignTimestamps()` indices and the `cs-${idx}` scroll
+  anchors stay one-per-section
+  - The budget comes from `measureChordSheetCols()`, which measures real elements
+    (glyph advance from an out-of-flow span, width from an in-flow `<pre>`) rather than
+    assuming a glyph ratio — so it survives `--cs-font-size` changes and whatever
+    monospace the device substitutes. Returns 0 before layout, which means "don't wrap"
+  - The wrap is baked into the DOM, so `resize`/`orientationchange` re-render (debounced
+    150ms, skipped when the column count is unchanged so URL-bar height changes are free)
+  - Splitting a word is preferred over splitting a chord name: a halved chord is
+    unreadable, a halved word is merely ugly
+  - `overflow-x: auto` on the panel is now only a safety net (chord token wider than the
+    panel, or a pre-layout measurement)
 - `assignTimestamps()` + `smartMatchLyrics()` match each sheet lyric line to an LRC line by
   word-overlap score (accent-insensitive), monotonically forward, so the sheet can follow
   playback. Lines that re-match the previous LRC line get `time: null` and stay highlighted

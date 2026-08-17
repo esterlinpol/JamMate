@@ -69,6 +69,10 @@ button { touch-action: manipulation; }
 button:active { transform: scale(0.96); }
 .no-scale:active { transform: none; }
 
+/* overflow-x is a safety net only — wrapPair() in chords.js cuts lines to the
+   measured column budget, so this should not normally engage. It still covers
+   the cases the wrap can't fix: a single chord token wider than the panel, or a
+   measurement taken before the panel has been laid out. */
 #lyrics-chordify-panel { scroll-behavior: smooth; overflow-x: auto; }
 /* Autoscroll writes a position every frame — smooth scrolling would animate each
    write and lag behind. ID+class so it outranks the smooth rule above. */
