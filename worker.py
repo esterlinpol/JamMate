@@ -8,6 +8,9 @@ Usage:
   python worker.py --server http://192.168.1.5:8000 --device mps   # Mac (fast)
   python worker.py --server http://localhost:8000 --device cpu       # Server (slow)
 
+--server and --device default to $JAMMATE_SERVER and $JAMMATE_DEVICE, so set those
+once in your shell profile and ./worker.sh needs no arguments.
+
 Dependencies: pip install -r requirements.txt
 
 The worker polls for pending jobs, processes them (Demucs → Opus transcode),
@@ -16,6 +19,7 @@ uploads results, and marks the job done.
 import argparse
 import json as _json
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -75,9 +79,11 @@ def _fetch_cifra_sheet(server: str, job_id: str) -> bool:
     return False
 
 
-def _heartbeat(server: str):
+def _heartbeat(server: str, name: str = "", device: str = ""):
+    # Named so two workers sharing a server don't overwrite each other's status.
     try:
-        _SESSION.post(f"{server}/api/settings/worker-heartbeat", timeout=5)
+        _SESSION.post(f"{server}/api/settings/worker-heartbeat",
+                      json={"name": name, "device": device}, timeout=5)
     except Exception:
         pass
 
@@ -319,8 +325,10 @@ def _process_job(server: str, job: dict, device: str):
         demucs_out.mkdir()
 
         # ── Step 1: Acquire source audio ──────────────────────────────────
-        _patch(server, job_id, status="processing", progress=0,
-               progress_phase="Downloading source…")
+        # status='processing' was already set atomically when the server handed us
+        # the job. Every _patch from here also refreshes updated_at, which is what
+        # lets the server reclaim this job if we die mid-run.
+        _patch(server, job_id, progress=0, progress_phase="Downloading source…")
 
         if source_type == "youtube":
             _patch(server, job_id, progress_phase="Downloading from YouTube…")
@@ -398,24 +406,34 @@ def _process_job(server: str, job: dict, device: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Guitar Practice Tool — Worker")
-    parser.add_argument("--server", required=True,
-                        help="Server base URL, e.g. http://192.168.1.5:8000")
-    parser.add_argument("--device", default="cpu",
+    # Defaults from the environment so the Mac worker — which points at the home
+    # server, not at localhost — doesn't need the URL retyped on every run.
+    parser.add_argument("--server", default=os.environ.get("JAMMATE_SERVER", "http://localhost:8000"),
+                        help="Server base URL, e.g. http://192.168.1.5:8000 "
+                             "(default: $JAMMATE_SERVER, else http://localhost:8000)")
+    parser.add_argument("--device", default=os.environ.get("JAMMATE_DEVICE", "cpu"),
                         choices=["mps", "cpu", "cuda"],
-                        help="Torch device for Demucs")
+                        help="Torch device for Demucs (default: $JAMMATE_DEVICE, else cpu)")
+    parser.add_argument("--name", default=os.environ.get("JAMMATE_WORKER_NAME") or platform.node(),
+                        help="Worker name shown in Settings (default: this machine's hostname)")
     parser.add_argument("--poll-interval", type=int, default=10,
                         help="Seconds between polls when idle")
     args = parser.parse_args()
 
     server = args.server.rstrip("/")
     device = args.device
-    print(f"[worker] starting — server={server} device={device}", flush=True)
+    name = args.name
+    print(f"[worker] starting — server={server} device={device} name={name}", flush=True)
 
     while True:
-        _heartbeat(server)
+        _heartbeat(server, name, device)
         try:
             # ── Full processing jobs ───────────────────────────────────────
-            r = _SESSION.get(f"{server}/api/jobs/pending", timeout=15)
+            # The server claims the job atomically and hands back the row, so two
+            # workers can share one server without separating the same song twice.
+            # Passing our device lets it prefer the machine chosen in Settings.
+            r = _SESSION.get(f"{server}/api/jobs/pending",
+                             params={"device": device, "worker": name}, timeout=15)
             r.raise_for_status()
             job = r.json().get("job")
             if job:

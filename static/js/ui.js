@@ -15,8 +15,8 @@ import {
 // Wire lyric seek clicks through to the player
 setSeekFn(doSeek);
 
-const STATUS_COLOR = { done: '#22c55e', processing: '#fbbf24', pending: '#94a3b8', error: '#f87171' };
-const STATUS_LABEL = { done: 'Ready', processing: 'Processing…', pending: 'Queued', error: 'Error' };
+const STATUS_COLOR = { done: '#22c55e', processing: '#fbbf24', pending: '#94a3b8', error: '#f87171', syncing: '#38bdf8' };
+const STATUS_LABEL = { done: 'Ready', processing: 'Processing…', pending: 'Queued', error: 'Error', syncing: 'Syncing…' };
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s || '')
@@ -549,6 +549,10 @@ async function openSettings() {
       : ago < 2   ? 'Worker active'
       : ago < 60  ? `Last seen ${ago} min ago`
       :              `Last seen ${Math.round(ago / 60)}h ago`;
+
+    $('sync-hub-url').value = s.sync_hub_url || '';
+    $('sync-token').value   = s.sync_token   || '';   // server sends *** if one is set
+    refreshSyncStatus();
   } catch (e) { $('worker-status-text').textContent = 'Could not load settings'; }
 }
 
@@ -571,6 +575,83 @@ async function setDevice(d) {
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ worker_device: d }),
   });
+}
+
+// ── Song sync ─────────────────────────────────────────────────────────────────
+
+let syncPoll = null;
+
+async function saveSyncSettings() {
+  // A token left as the *** the server sent back means "unchanged" — the server
+  // drops that value rather than overwriting the real one with asterisks.
+  await api('/api/settings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      sync_hub_url: $('sync-hub-url').value.trim(),
+      sync_token:   $('sync-token').value,
+    }),
+  });
+  refreshSyncStatus();
+}
+
+function renderSyncStatus(s) {
+  const el = $('sync-status');
+  if (s.is_hub) {
+    el.textContent = 'This instance is the hub — other devices sync from it.';
+    return;
+  }
+  if (s.running) { el.textContent = s.phase || 'Syncing…'; return; }
+
+  const mode = s.read_only ? 'Mirror (pull only) — ' : '';
+  const parts = [];
+  if (s.pulled)        parts.push(`${s.pulled} in`);
+  if (s.pushed)        parts.push(`${s.pushed} out`);
+  if (s.handed_off)    parts.push(`${s.handed_off} queued on hub`);
+  if (s.deleted_local || s.deleted_remote)
+    parts.push(`${s.deleted_local + s.deleted_remote} deleted`);
+  if (s.bytes) parts.push(`${(s.bytes / 1048576).toFixed(1)} MB`);
+
+  let txt = mode + (s.finished_at
+    ? (parts.length ? parts.join(' · ') : 'Already up to date')
+    : 'Not synced yet');
+  if (s.warnings?.length) txt += `\n⚠ ${s.warnings.join('; ')}`;
+  if (s.errors?.length)   txt += `\n✕ ${s.errors.join('; ')}`;
+  el.textContent = txt;
+  el.style.whiteSpace = 'pre-line';
+}
+
+async function refreshSyncStatus() {
+  try { renderSyncStatus(await api('/api/sync/status')); } catch (e) { /* offline */ }
+}
+
+async function syncNow() {
+  const btn = $('sync-now');
+  btn.disabled = true;
+  try {
+    await saveSyncSettings();
+    await api('/api/sync/run', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ direction: 'both' }),
+    });
+
+    clearInterval(syncPoll);
+    syncPoll = setInterval(async () => {
+      let s;
+      try { s = await api('/api/sync/status'); } catch (e) { return; }
+      renderSyncStatus(s);
+      if (!s.running) {
+        clearInterval(syncPoll);
+        syncPoll = null;
+        btn.disabled = false;
+        refreshLibrary();     // songs that landed should show up straight away
+      }
+    }, 1500);
+  } catch (e) {
+    $('sync-status').textContent = e.message || 'Sync failed to start';
+    btn.disabled = false;
+  }
 }
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
@@ -691,6 +772,9 @@ $('cifra-fetch-btn').addEventListener('click',      fetchCifraSheet);
 $('settings-backdrop').addEventListener('click', closeSettings);
 $('device-mps').addEventListener('click', () => setDevice('mps'));
 $('device-cpu').addEventListener('click', () => setDevice('cpu'));
+$('sync-hub-url').addEventListener('change', saveSyncSettings);
+$('sync-token').addEventListener('change', saveSyncSettings);
+$('sync-now').addEventListener('click', syncNow);
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 

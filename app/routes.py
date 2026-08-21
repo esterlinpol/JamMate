@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import time
@@ -27,11 +28,37 @@ _SUFFIX_RE = re.compile(r'\s*[\(\[][^\)\]]*[\)\]]')
 _FILLER = {"official video", "official audio", "official music video", "lyrics",
            "lyric video", "audio", "hd", "hq", "letra", "subtitulado"}
 
+_STALE_CLAIM_SEC = 1800    # no progress patch for 30 min ⇒ that worker died
+_DEFAULT_GRACE_SEC = 60    # how long a non-preferred worker waits before claiming
+
+# job_id and stem filenames arrive from the URL and get joined onto a filesystem
+# path, so they are validated rather than trusted. Without this,
+# /api/jobs/x/stems/..%2f..%2fapp%2froutes.py is an arbitrary file write.
+_ID_RE = re.compile(r"[0-9a-fA-F-]{8,64}")
+_STEM_RE = re.compile(r"[A-Za-z0-9_-]{1,32}\.(?:ogg|wav|mp3)")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def safe_stem(filename: str) -> str:
     return re.sub(r"[^\w\-]", "_", Path(filename).stem)
+
+
+def _safe_id(value: str) -> bool:
+    return bool(_ID_RE.fullmatch(value or ""))
+
+
+def _safe_stem_name(value: str) -> bool:
+    return bool(_STEM_RE.fullmatch(value or ""))
+
+
+def _bad_path() -> JSONResponse:
+    return JSONResponse({"error": "invalid path"}, status_code=400)
+
+
+def _setting(conn, key: str, default: str = "") -> str:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row and row["value"] else default
 
 
 def _parse_yt_title(raw_title: str, channel: str) -> tuple[str, str]:
@@ -97,6 +124,10 @@ class JobPatch(BaseModel):
 class SettingsPatch(BaseModel):
     worker_device: Optional[str] = None
     preferred_chord_source: Optional[str] = None
+    sync_hub_url: Optional[str] = None
+    sync_token: Optional[str] = None
+    sync_direction: Optional[str] = None
+    worker_grace_sec: Optional[str] = None
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
@@ -113,14 +144,68 @@ async def list_jobs():
 
 
 @router.get("/api/jobs/pending")
-async def get_pending():
+async def get_pending(device: str = "", worker: str = ""):
+    """Atomically claim the next job for the calling worker.
+
+    Two workers share one server (Mac on MPS, home server on CPU) and the old
+    SELECT-only version handed both of them the same job. The UPDATE below is
+    guarded on the status it just read, so exactly one caller can win a job.
+
+    `worker_device` in settings is a *preference*, not a gate: the matching worker
+    claims straight away, any other worker waits out `worker_grace_sec` first. So
+    the Mac takes new songs while it is around, and nothing starves when it isn't.
+    """
+    now = time.time()
     with db() as conn:
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
-        ).fetchone()
-    if not row:
-        return {"job": None}
-    return {"job": dict(row)}
+        preferred = _setting(conn, "worker_device")
+        try:
+            grace = float(_setting(conn, "worker_grace_sec", str(_DEFAULT_GRACE_SEC)))
+        except ValueError:
+            grace = _DEFAULT_GRACE_SEC
+
+        # An unset preference, or a worker that doesn't say what it is, behaves as
+        # it always did: claim immediately.
+        is_preferred = not preferred or not device or device == preferred
+
+        if is_preferred:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status = 'pending' AND created_at < ?"
+                " ORDER BY created_at ASC LIMIT 1",
+                (now - grace,),
+            ).fetchone()
+
+        expect = "pending"
+        if not row:
+            # Nothing fresh. A worker that dies mid-run stops sending progress
+            # patches, so a stale updated_at means that job was abandoned — any
+            # worker may take it back, preference and grace do not apply because
+            # the job is already late.
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status = 'processing' AND updated_at < ?"
+                " ORDER BY updated_at ASC LIMIT 1",
+                (now - _STALE_CLAIM_SEC,),
+            ).fetchone()
+            expect = "processing"
+        if not row:
+            return {"job": None}
+
+        # Compare-and-swap on the status we read. If another worker got here first
+        # this matches no rows and we simply report no work rather than duplicating.
+        cur = conn.execute(
+            "UPDATE jobs SET status = 'processing', progress = 0, progress_phase = ?,"
+            " updated_at = ? WHERE id = ? AND status = ?",
+            (f"Claimed by {worker or device or 'worker'}", now, row["id"], expect),
+        )
+        if cur.rowcount == 0:
+            return {"job": None}
+
+        job = dict(row)
+        job.update(status="processing", progress=0, updated_at=now)
+    return {"job": job}
 
 
 @router.get("/api/jobs/{job_id}")
@@ -150,11 +235,19 @@ async def patch_job(job_id: str, patch: JobPatch):
 
 @router.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
+    if not _safe_id(job_id):
+        return _bad_path()
     with db() as conn:
         row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if not row:
             return JSONResponse({"error": "not found"}, status_code=404)
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        # Record the deletion so a sync doesn't pull this song back from a peer
+        # that still has it. This is the one write that makes deletes converge.
+        conn.execute(
+            "INSERT OR REPLACE INTO tombstones (id, deleted_at) VALUES (?, ?)",
+            (job_id, time.time()),
+        )
 
     for d in (UPLOAD_DIR / job_id, SEPARATED_DIR / job_id):
         if d.exists():
@@ -204,6 +297,8 @@ async def get_stems(job_id: str):
 
 @router.post("/api/jobs/{job_id}/source")
 async def upload_source(job_id: str, request: Request):
+    if not _safe_id(job_id):
+        return _bad_path()
     with db() as conn:
         row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if not row:
@@ -222,6 +317,8 @@ async def upload_source(job_id: str, request: Request):
 
 @router.get("/api/audio/{job_id}/source")
 async def get_source(job_id: str):
+    if not _safe_id(job_id):
+        return _bad_path()
     with db() as conn:
         row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if not row:
@@ -241,6 +338,8 @@ async def get_source(job_id: str):
 
 @router.get("/api/audio/{job_id}/{stem_file}")
 async def get_stem(job_id: str, stem_file: str, request: Request):
+    if not _safe_id(job_id) or not _safe_stem_name(stem_file):
+        return _bad_path()
     with db() as conn:
         row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if not row:
@@ -256,6 +355,8 @@ async def get_stem(job_id: str, stem_file: str, request: Request):
 
 @router.post("/api/jobs/{job_id}/stems/{stem_name}")
 async def upload_stem(job_id: str, stem_name: str, request: Request):
+    if not _safe_id(job_id) or not _safe_stem_name(stem_name):
+        return _bad_path()
     with db() as conn:
         row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
     if not row:
@@ -263,7 +364,11 @@ async def upload_stem(job_id: str, stem_name: str, request: Request):
 
     stem_dir = SEPARATED_DIR / job_id
     stem_dir.mkdir(parents=True, exist_ok=True)
-    (stem_dir / stem_name).write_bytes(await request.body())
+    # Staged then renamed so a stem is never visible half-written — get_stems only
+    # lists .ogg/.wav/.mp3, and a .part suffix is invisible to it.
+    tmp = stem_dir / f"{stem_name}.part"
+    tmp.write_bytes(await request.body())
+    os.replace(tmp, stem_dir / stem_name)
     return {"ok": True}
 
 
@@ -510,16 +615,27 @@ def fetch_lyrics(job_id: str):
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
+_TOKEN_MASK = "***"
+
+
 @router.get("/api/settings")
 async def get_settings():
     with db() as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    return {r["key"]: r["value"] for r in rows}
+    out = {r["key"]: r["value"] for r in rows}
+    # Never hand the shared secret back to the browser.
+    if out.get("sync_token"):
+        out["sync_token"] = _TOKEN_MASK
+    return out
 
 
 @router.post("/api/settings")
 async def update_settings(patch: SettingsPatch):
     updates = {k: v for k, v in patch.model_dump().items() if v is not None}
+    # The UI round-trips the masked value, so treat it as "leave it alone" rather
+    # than overwriting the real token with literal asterisks.
+    if updates.get("sync_token") == _TOKEN_MASK:
+        updates.pop("sync_token")
     with db() as conn:
         for key, value in updates.items():
             conn.execute(
@@ -529,12 +645,28 @@ async def update_settings(patch: SettingsPatch):
 
 
 @router.post("/api/settings/worker-heartbeat")
-async def worker_heartbeat():
+async def worker_heartbeat(request: Request):
+    # Keyed by worker name so two workers sharing this server don't overwrite each
+    # other's status. The bare key stays for the "any worker alive?" check and for
+    # workers old enough not to send a name.
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    name = str(body.get("name") or "").strip()[:64] if isinstance(body, dict) else ""
+    device = str(body.get("device") or "").strip()[:16] if isinstance(body, dict) else ""
+    now = str(time.time())
+
     with db() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('worker_last_seen', ?)",
-            (str(time.time()),),
+            (now,),
         )
+        if name:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (f"worker_seen:{name}", f"{now}|{device}"),
+            )
     return {"ok": True}
 
 

@@ -9,6 +9,9 @@ venv/
 # Data (uploads, stems, database — never commit user audio)
 data/
 
+# Secrets (sync token). Already in .dockerignore; must stay out of git too.
+.env
+
 # OS
 .DS_Store
 Thumbs.db

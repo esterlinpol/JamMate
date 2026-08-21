@@ -14,6 +14,7 @@ from jinjax import Catalog
 
 from app.db import init_db
 from app.routes import router
+from app.sync import router as sync_router
 
 catalog = Catalog(file_ext=".html")
 catalog.add_folder("components")
@@ -31,6 +32,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(router)
+app.include_router(sync_router)
 
 @app.get("/")
 async def index():

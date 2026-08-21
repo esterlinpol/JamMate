@@ -71,9 +71,26 @@ def init_db():
                 updated_at REAL NOT NULL
             );
 
+            -- A deleted song has to leave a trace, or the next sync pulls it back
+            -- from a peer that still has it. Never garbage collected: 40 bytes a
+            -- row, and a device offline for months still needs to see them.
+            CREATE TABLE IF NOT EXISTS tombstones (
+                id TEXT PRIMARY KEY,
+                deleted_at REAL NOT NULL
+            );
+
             INSERT OR IGNORE INTO settings (key, value) VALUES
                 ('worker_device', 'cpu'),
-                ('worker_last_seen', '');
+                ('worker_last_seen', ''),
+                -- Empty sync_hub_url means "I am the hub": serve, never initiate.
+                -- Set it and this instance becomes a client of that address.
+                ('sync_hub_url', ''),
+                ('sync_token', ''),
+                -- both | pull | push. A hard limit, not a default: set it to 'pull'
+                -- and this instance is a read-only mirror that can never write to
+                -- the hub, whatever the UI or a CLI flag asks for.
+                ('sync_direction', 'both'),
+                ('worker_grace_sec', '60');
         """)
         # Migration: add new columns to existing databases
         existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}

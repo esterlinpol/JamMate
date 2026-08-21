@@ -14,11 +14,22 @@ JamMate is a local web app for musicians. You upload or import a song (YouTube o
 # Start the FastAPI server
 uvicorn app.main:app --reload
 
-# Start the Demucs worker (separate terminal)
+# Start the Demucs worker (separate terminal, venv active)
 ./worker.sh
 ```
 - App runs at `http://localhost:8000`
 - Worker polls `/api/jobs/pending` and processes songs via `worker.py` + `demucs_runner.py`
+
+### Worker configuration (env, not flags)
+`--server` and `--device` default to `$JAMMATE_SERVER` and `$JAMMATE_DEVICE`, so the
+Mac worker — which points at the home server, not localhost — needs no arguments:
+```bash
+export JAMMATE_SERVER=http://192.168.1.5:8000
+./worker.sh                 # uses that server, device=mps (worker.sh's default)
+./worker.sh --device cpu     # flags still override
+```
+`worker.sh` calls bare `python`, so the venv must be active. `--name` (default the
+machine hostname) is what the heartbeat is keyed by.
 - Stems stored under `data/separated/{job_id}/`
 - Uploads stored under `data/uploads/`
 - Database: `data/songs.db` (SQLite)
@@ -41,9 +52,11 @@ uvicorn app.main:app --reload
 ### Backend
 | File | Purpose |
 |---|---|
-| `app/main.py` | FastAPI app, mounts routes, serves `Layout.html` at `/` |
+| `app/main.py` | FastAPI app, mounts `routes.py` + `sync.py`, serves `Layout.html` at `/` |
 | `app/routes.py` | All API endpoints (see section below) |
+| `app/sync.py` | Song sync between instances: manifest, `plan()`, pull/push, `run_sync()`, CLI |
 | `app/db.py` | SQLite schema, migrations, `init_db()`, default chord seeding |
+| `tests/test_sync_plan.py` | Tests for `sync.plan()` — fabricated manifests, no server or audio |
 | `worker.py` | Background job loop: polls pending jobs, calls Demucs |
 | `demucs_runner.py` | Wrapper that runs Demucs and writes stems |
 | `worker.sh` | Shell script to start the worker |
@@ -100,10 +113,29 @@ created_at, updated_at
 - `frets`: -1=muted, 0=open, 1+=fret number
 - `barre`: `{"fret": N, "from": 0, "to": 5}` or null
 
+### `tombstones` table (deleted songs)
+```
+id, deleted_at
+```
+Written by `DELETE /api/jobs/{id}`. Without it, a sync pulls a deleted song back from
+any peer that still has it. Never garbage collected — 40 bytes a row, and a device
+offline for months still needs to see them.
+
 ### `settings` table
 ```
-key, value   -- worker_device (cpu|cuda|mps), preferred_chord_source, worker_last_seen
+key, value
+-- worker_device       cpu|cuda|mps — PREFERRED worker for new jobs (see routing below)
+-- worker_grace_sec    how long a non-preferred worker waits before claiming (default 60)
+-- worker_last_seen    newest heartbeat from any worker
+-- worker_seen:{name}  "{timestamp}|{device}" per worker, so two don't overwrite each other
+-- sync_hub_url        empty ⇒ this instance IS the hub; set ⇒ it is a client of that URL
+-- sync_token          shared secret for /api/sync/*; empty ⇒ those endpoints return 503
+-- sync_last_run       unix ts of the last sync
+-- sync_last_result    JSON counters from the last sync
+-- preferred_chord_source  (dead — declared in SettingsPatch, never read)
 ```
+`GET /api/settings` masks `sync_token` as `***`, and `POST` ignores an incoming `***`
+so a settings save can't clobber the real token with asterisks.
 
 ---
 
@@ -112,8 +144,8 @@ key, value   -- worker_device (cpu|cuda|mps), preferred_chord_source, worker_las
 ### Jobs
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/jobs` | List all songs |
-| GET | `/api/jobs/pending` | Worker polls this |
+| GET | `/api/jobs` | List all songs (partial projection — no `updated_at`) |
+| GET | `/api/jobs/pending?device=&worker=` | Worker polls this — **atomically claims** the job (see below) |
 | GET | `/api/jobs/{id}` | Single job |
 | PATCH | `/api/jobs/{id}` | Update any field in `JobPatch` model |
 | DELETE | `/api/jobs/{id}` | Delete job + stems |
@@ -146,6 +178,66 @@ BPM detection logic (in `routes.py:detect_bpm`):
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/jobs/{id}/fetch-cifra` | Fetch + parse a Cifra Club page into `chord_sheet` (auto-searches by artist/title if no URL given) |
+
+### Job claiming & worker routing (`routes.py:get_pending`)
+`/api/jobs/pending` used to be a bare `SELECT ... WHERE status='pending' LIMIT 1` with no
+status flip, so two workers sharing one server both grabbed the same job. It now:
+
+1. Picks a candidate, then does a **compare-and-swap** `UPDATE ... WHERE id=? AND status=?`.
+   Only one caller can win; the loser gets `{"job": null}` and polls again. Portable —
+   no `RETURNING`, so the SQLite in the server container doesn't matter.
+2. Applies `worker_device` as a **preference, not a gate**: a worker whose `--device`
+   matches claims immediately; any other waits until the job is older than
+   `worker_grace_sec`. So the Mac takes new songs while it's around and the server's CPU
+   worker covers when it isn't. **Nothing can starve** — a wrong setting costs 60s, not a
+   stuck queue. An unset preference, or a worker that sends no `device`, claims at once.
+3. Falls back to **reclaiming a stale job**: `processing` with `updated_at` older than
+   `_STALE_CLAIM_SEC` (30 min) means that worker died. Any worker may take it, with no
+   preference or grace applied, because the job is already late. Every `_patch` from the
+   worker refreshes `updated_at`, which is what makes it a per-job heartbeat.
+
+### Sync (`app/sync.py`)
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/sync/manifest` | Token-gated. Every song's id/status/`updated_at` + `{stem: size}`, plus tombstones and the column list |
+| PUT | `/api/sync/jobs/{id}` | Token-gated. Whole-row upsert, writing `created_at`/`updated_at` **verbatim**; clears any tombstone for that id |
+| POST | `/api/sync/run` | Local control plane (not token-gated) — starts a background thread |
+| GET | `/api/sync/status` | Live counters, phase, warnings, errors, `is_hub` |
+
+Plus `python -m app.sync [--hub URL] [--direction both|pull|push]` for cron/manual runs.
+
+- **Role is config, not a build**: `sync_hub_url` empty ⇒ hub (serves only, never
+  initiates); set ⇒ client of that address. Every instance runs the same code, so a
+  mobile app later is just another client of these calls.
+- **`updated_at` is the sync clock.** `patch_job` restamps it locally on every edit, which
+  is correct; the sync upsert copies it verbatim so both sides agree which copy is newer.
+  `SKEW = 1.0`s absorbs JSON float round-tripping — without it the two sides ping-pong
+  forever. That is what `tests/test_sync_plan.py`'s idempotency test guards.
+- **Sizes, not checksums.** A stem is written once, by one worker, into a globally unique
+  `{job_id}` dir, so two sides can never hold different bytes under the same name. Size
+  answers "present and complete", and hashing 154 MB per manifest would not be free.
+- **Only `done` songs carry stems.** A `pending` song added on a client is pushed up
+  metadata-only (`push_pending`) so whichever worker is up separates it; the stems come
+  back on a later run. Guarded on the hub not knowing the id in *any* state, so it can't
+  double-submit. Don't point a worker at an instance that has `sync_hub_url` set.
+- **Half-copied songs are structurally unplayable**: the row is held at `status='syncing'`
+  while audio is in flight, `GET /api/stems/{id}` 400s unless `done`, and `renderCard`
+  only makes `done` cards clickable. Stems stage through `{name}.part` — invisible to
+  `get_stems`, which filters on suffix — then `os.replace()`.
+- **Resume needs no journal.** A `syncing` row isn't `done`, so it looks absent and
+  re-enters the pull; stems already on disk at the right size are skipped. The plan is
+  recomputed from state every run, so there's no cursor to corrupt.
+- **`plan()` is pure** — two dicts in, actions out. Every real bug (ping-pong, tombstone
+  resurrection, direction inversion, stem size) is testable with no server or audio.
+- **Schema drift is reported, not silent.** The upsert whitelist comes from
+  `PRAGMA table_info(jobs)`, not a hardcoded list, because this checkout routinely runs a
+  newer schema than the deployed hub. Differing columns produce a warning instead of
+  quietly dropped fields.
+- **Auth fails closed**: no `sync_token` (or `$JAMMATE_SYNC_TOKEN`) ⇒ `/api/sync/*` returns
+  503, so deploying this code opens nothing. `POST /api/jobs/{id}/stems/{name}` stays
+  unauthenticated because `worker.py` uses it — same posture as before.
+- Not synced: `data/uploads` (source audio isn't retained anyway), `settings`
+  (per-machine), `chords` (per-machine uuids).
 
 A sheet can also be pasted manually and saved via `PATCH /api/jobs/{id}` with `chord_sheet`.
 Both paths run `strip_cifra_ads()` — see Known Behaviours.
@@ -286,10 +378,26 @@ Volume stepper, tempo stepper, tiles (Sheet, BPM), Lyrics pills. Steppers share
 - **Lyrics transitions**: only `opacity` transitions on Spotify mode. Font-size must change instantly to avoid layout reflow.
 - **Screen wake lock**: the Wake Lock API needs a secure context, so it is unavailable over `http://<lan-ip>:8000` on a phone. `wake-lock.js` falls back to a muted looping video. Releases are debounced 1.5s because seek/tempo changes pause-then-play.
 - **Stem format**: Demucs outputs `.ogg` files; stems are served with Range support for seek.
+- **Path validation on audio routes**: `job_id` and stem filenames arrive from the URL and
+  get joined onto a filesystem path, so `_safe_id()` / `_safe_stem_name()` guard
+  `get_stem`, `upload_stem`, `upload_source`, `delete_job` and the sync PUT. Without them
+  `POST /api/jobs/x/stems/../../app/foo.py` was an unauthenticated arbitrary file write.
+  Note `.part` names are deliberately rejected from the network — they are internal only.
+- **`patch_job` cannot clear a field or set timestamps**: `None` means "don't touch", and
+  `updated_at` is always restamped locally. That's right for UI edits and wrong for sync,
+  which is why `PUT /api/sync/jobs/{id}` exists as a separate whole-row upsert rather than
+  `JobPatch` being widened — `worker.py:_patch()` and four `ui.js` callers depend on the
+  current semantics.
 
 ---
 
 ## What's In Progress / Next Steps
+- Sync UI lives only in the Settings sheet (hub URL, token, Sync now). There is no
+  per-song "not downloaded" state — a client pulls every `done` song in full
+- Optional and not done: `JAMMATE_DATA_DIR` so two instances can share one checkout
+  without symlinking `components/` and `static/` into a second working directory; the
+  sync token on `worker.py`'s stem upload; surfacing `worker_seen:{name}` rows in Settings
+  so you can see *which* worker is alive rather than just "a worker is"
 - Chord sheet timing still relies on an LRC to anchor lines; songs with no LRC now fall back to Autoscroll (constant rate) rather than following the song properly
 - Wake lock is untested on device (both Mac and phone)
 - Sheet font size (`--cs-font-size`) may want a user-facing control rather than a CSS constant

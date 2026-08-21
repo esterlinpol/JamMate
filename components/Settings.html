@@ -12,7 +12,7 @@
         <button id="device-mps" class="device-btn flex-1 py-3 rounded-xl text-sm font-semibold border transition-all">Mac (MPS)</button>
         <button id="device-cpu" class="device-btn flex-1 py-3 rounded-xl text-sm font-semibold border transition-all">Server CPU</button>
       </div>
-      <p class="text-xs text-[#86efac] mt-2 opacity-50">Start worker.py on the chosen machine with the matching --device flag</p>
+      <p class="text-xs text-[#86efac] mt-2 opacity-50">Preferred worker for new songs. Another worker picks them up after a minute, so nothing gets stuck.</p>
     </div>
 
     <div>
@@ -20,6 +20,21 @@
       <div id="worker-status-text" class="text-sm text-[#86efac] bg-[#172017] rounded-xl px-3 py-2.5 border border-[#1e2e1e]">
         Checking…
       </div>
+    </div>
+
+    <div>
+      <label class="text-xs text-[#86efac] uppercase tracking-widest mb-2 block">Song Sync</label>
+      <input id="sync-hub-url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+        placeholder="http://192.168.1.5:8000"
+        class="w-full text-sm bg-[#172017] rounded-xl px-3 py-2.5 border border-[#1e2e1e] text-[#f0fdf4] placeholder:text-[#86efac] placeholder:opacity-40 mb-2">
+      <input id="sync-token" type="password" autocomplete="off"
+        placeholder="Shared token"
+        class="w-full text-sm bg-[#172017] rounded-xl px-3 py-2.5 border border-[#1e2e1e] text-[#f0fdf4] placeholder:text-[#86efac] placeholder:opacity-40 mb-2">
+      <button id="sync-now"
+        class="w-full py-3 rounded-xl text-sm font-semibold border border-[#22c55e] text-[#22c55e] bg-[#22c55e]/10 active:bg-[#22c55e]/20 transition-all disabled:opacity-40">
+        Sync now
+      </button>
+      <p id="sync-status" class="text-xs text-[#86efac] mt-2 opacity-70 break-words"></p>
     </div>
   </div>
 </div>

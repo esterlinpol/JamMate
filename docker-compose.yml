@@ -5,6 +5,11 @@ services:
       - "8000:8000"
     volumes:
       - jammate-data:/app/data
+    environment:
+      # Shared secret for /api/sync/*. Read before the settings table, so it
+      # survives the volume being recreated. Unset means the sync endpoints
+      # return 503 rather than being open — set it in .env (never committed).
+      - JAMMATE_SYNC_TOKEN=${JAMMATE_SYNC_TOKEN:-}
     restart: unless-stopped
 
 volumes:
