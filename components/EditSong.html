@@ -1,0 +1,41 @@
+<div id="edit-backdrop"></div>
+<div id="edit-sheet">
+  <div class="w-10 h-1 bg-[#1e2e1e] rounded-full mx-auto mb-5"></div>
+  <h2 class="font-bold text-lg text-[#f0fdf4] mb-1">Edit Song</h2>
+  <p class="text-xs text-[#86efac] opacity-50 mb-4 leading-snug">
+    Title and artist are what LRCLIB and Cifra Club are searched with, so fixing them
+    here is what makes a re-fetch find the right song.
+  </p>
+
+  <div class="mb-3">
+    <label class="text-xs text-[#86efac] mb-1.5 block">Title</label>
+    <input id="edit-title" type="text" placeholder="Song title" />
+  </div>
+
+  <div class="mb-3">
+    <label class="text-xs text-[#86efac] mb-1.5 block">Artist</label>
+    <input id="edit-artist" type="text" placeholder="Artist name" />
+  </div>
+
+  <!-- YouTube titles land as "Artist - Title" often enough that _parse_yt_title
+       guesses wrong, which is the whole reason this sheet exists. -->
+  <button id="edit-swap"
+    class="w-full py-2 mb-4 rounded-xl text-xs font-semibold bg-[#172017] border border-[#1e2e1e] text-[#86efac] hover:border-[#22c55e]/60 hover:text-green-300 transition-colors flex items-center justify-center gap-1.5">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+    </svg>
+    Swap title and artist
+  </button>
+
+  <div class="flex gap-2">
+    <button id="edit-cancel"
+      class="flex-1 py-3 rounded-2xl text-sm font-semibold bg-[#172017] border border-[#1e2e1e] text-[#86efac]">
+      Cancel
+    </button>
+    <button id="edit-save"
+      class="no-scale flex-[2] py-3 rounded-2xl bg-[#22c55e] text-[#0a0f0a] font-bold text-sm active:bg-[#16a34a]">
+      Save
+    </button>
+  </div>
+  <p id="edit-error" class="hidden text-[#f87171] text-sm text-center mt-3"></p>
+</div>

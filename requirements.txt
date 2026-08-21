@@ -12,3 +12,7 @@ yt-dlp>=2024.0.0
 requests>=2.31.0
 numpy>=1.24.0
 soundfile>=0.12.0
+# Forced lyric alignment (lyric_align.py). Pre-warm the model once so the first
+# job doesn't stall for minutes on a silent download:
+#   ./venv/bin/python -c "import stable_whisper; stable_whisper.load_model('small')"
+stable-ts>=2.19.0

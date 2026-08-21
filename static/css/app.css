@@ -31,15 +31,18 @@ html, body { height: 100%; margin: 0; background: #0a0f0a; color: #f0fdf4;
 #progress-fill { height: 100%; background: #22c55e; border-radius: 3px; width: 0%; pointer-events: none; }
 #progress-bar::after { content: ''; position: absolute; inset: -8px 0; }
 
-#sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+/* Bottom sheets share one geometry — the app's 1024px max-width lives in the
+   calc() below, so a new sheet joins these selectors instead of restating it. */
+#sheet-backdrop, #edit-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65);
   z-index: 40; display: none; backdrop-filter: blur(2px); }
-#sheet { position: fixed; bottom: 0;
+#sheet, #edit-sheet { position: fixed; bottom: 0;
   left: max(0px, calc(50% - 512px)); right: max(0px, calc(50% - 512px));
   background: #111811; border-radius: 20px 20px 0 0; z-index: 50;
   padding: 16px 20px max(32px, env(safe-area-inset-bottom));
   display: none; max-height: 92vh; overflow-y: auto;
   border-top: 1px solid #1e2e1e; }
-#sheet.open, #sheet-backdrop.open { display: block; }
+#sheet.open, #sheet-backdrop.open,
+#edit-sheet.open, #edit-backdrop.open { display: block; }
 
 @media (orientation: portrait) {
   #library-view { display: flex; flex-direction: column; height: 100svh; }

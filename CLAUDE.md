@@ -28,6 +28,13 @@ export JAMMATE_SERVER=http://192.168.1.5:8000
 ./worker.sh                 # uses that server, device=mps (worker.sh's default)
 ./worker.sh --device cpu     # flags still override
 ```
+Lyric alignment has its own device and model, `$JAMMATE_ALIGN_DEVICE` (default `cpu`)
+and `$JAMMATE_ALIGN_MODEL` (default `small`). It deliberately does **not** follow
+`--device`: Demucs wants MPS, Whisper on MPS hits unimplemented sparse ops. Pre-warm
+the model once, or the first job stalls for minutes on a silent download:
+```bash
+./venv/bin/python -c "import stable_whisper; stable_whisper.load_model('small')"
+```
 `worker.sh` calls bare `python`, so the venv must be active. `--name` (default the
 machine hostname) is what the heartbeat is keyed by.
 - Stems stored under `data/separated/{job_id}/`
@@ -57,8 +64,11 @@ machine hostname) is what the heartbeat is keyed by.
 | `app/sync.py` | Song sync between instances: manifest, `plan()`, pull/push, `run_sync()`, CLI |
 | `app/db.py` | SQLite schema, migrations, `init_db()`, default chord seeding |
 | `tests/test_sync_plan.py` | Tests for `sync.plan()` — fabricated manifests, no server or audio |
-| `worker.py` | Background job loop: polls pending jobs, calls Demucs |
+| `worker.py` | Background job loop: polls pending jobs, calls Demucs, aligns lyrics |
 | `demucs_runner.py` | Wrapper that runs Demucs and writes stems |
+| `sheet_parse.py` | Zero-dep Python port of the chord/lyric line classifier in `chords.js` |
+| `lyric_align.py` | Forced lyric alignment via stable-ts; run as a subprocess |
+| `tests/test_sheet_parse.py` | Tests for `sheet_parse` — fabricated sheets, no audio |
 | `worker.sh` | Shell script to start the worker |
 
 ### Frontend — HTML Components (JinjaX)
@@ -68,6 +78,7 @@ machine hostname) is what the heartbeat is keyed by.
 | `components/Player.html` | Player view: header, lyrics/chord-sheet area, stems, transport, actions sheet |
 | `components/Library.html` | Song list / home screen |
 | `components/AddSheet.html` | Add song form (upload or YouTube URL) |
+| `components/EditSong.html` | Edit title/artist bottom sheet, with a swap button |
 | `components/Settings.html` | Settings panel (worker device, etc.) |
 
 ### Frontend — JavaScript (`static/js/`)
@@ -97,6 +108,9 @@ created_at, updated_at,
 chord_sheet,       -- chord + lyric text imported from Cifra Club or pasted manually
 bpm,               -- detected float, shown as a badge in the player header
 scroll_speed,      -- int %: autoscroll rate, 100 = sheet ends exactly with the song
+align_status,      -- NULL|pending|running|done|error — local lyric alignment
+align_score,       -- 0..1 confidence of the last alignment (Phase 2 gates on this)
+align_text_source, -- lrclib-plain|cifra|manual — which text was aligned
 -- Dormant: written but no longer read by the UI (the beat-grid chord editor was
 -- removed; columns kept so the feature can return without a migration)
 song_chord_data,   -- LRC-format chord timeline: [MM:SS.ss]ChordName\n...
@@ -146,6 +160,7 @@ so a settings save can't clobber the real token with asterisks.
 |---|---|---|
 | GET | `/api/jobs` | List all songs (partial projection — no `updated_at`) |
 | GET | `/api/jobs/pending?device=&worker=` | Worker polls this — **atomically claims** the job (see below) |
+| GET | `/api/jobs/pending-align?worker=` | Second, lightweight queue — claims the next song queued for local lyric alignment |
 | GET | `/api/jobs/{id}` | Single job |
 | PATCH | `/api/jobs/{id}` | Update any field in `JobPatch` model |
 | DELETE | `/api/jobs/{id}` | Delete job + stems |
@@ -178,6 +193,79 @@ BPM detection logic (in `routes.py:detect_bpm`):
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/api/jobs/{id}/fetch-cifra` | Fetch + parse a Cifra Club page into `chord_sheet` (auto-searches by artist/title if no URL given) |
+
+### Local lyric alignment
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/jobs/{id}/align-lyrics?force=0` | Sets `align_status='pending'`, returns 202. 409 if `chord_source='lrclib'` unless `force=1`; 422 if there's no `chord_sheet` and no plain `chord_data` |
+
+When LRCLIB has no *synced* entry, the song used to fall back to constant-rate
+Autoscroll, which drifts against the actual singing. Demucs already produces an
+isolated `vocals.ogg` — the ideal input for forced alignment — so JamMate times its
+own lyrics instead of depending on a hit in a public database.
+
+- **Alignment, never transcription.** Whisper is given the words and only asked
+  *where* they fall. No ASR: a song with no lyrics text is an error, not an
+  invitation to guess.
+- **Runs in `worker.py`, never in the server.** The server container has no torch
+  and no numpy (`Dockerfile:6-12` installs six server packages), so
+  `POST /api/jobs/{id}/align-lyrics` only flips a flag — a worker picks the song up
+  off `/api/jobs/pending-align`.
+- **Text source, in preference order:** LRCLIB plain lyrics → Cifra sheet lyric
+  lines → manual paste. Plain lyrics win because *the sheet is not what's sung*:
+  repeats collapse to `(x2)`, the chorus is written once, `-CHORUS-` markers parse
+  as lyrics. Text that skips a repeated chorus drifts from that point on — the
+  biggest accuracy risk in this path, and why `align_score` is recorded at all.
+- **A real `lrclib` result is never clobbered.** Alignment is skipped when
+  `chord_source='lrclib'` unless explicitly forced, and it also fires on
+  `lrclib-plain`, not only on total LRCLIB failure.
+- **Low confidence is kept and used.** Even a weak alignment beats constant-rate
+  autoscroll; the score gates Phase 2 submission, not local use. The SYNC tile
+  shows it (`✓ 0.82`) so a weak result is visible rather than silently trusted.
+- **`chord_source='aligned'` is just an LRC.** Same format, so `parseLRC`,
+  `assignTimestamps`, `smartMatchLyrics` and `needsAutoscroll()` all work unchanged
+  — the frontend change is one `||` in `initLyrics()`. No alignment logic in the browser.
+- **A separate queue, because source audio isn't retained.** `data/uploads` is
+  empty for YouTube songs, so re-queueing a done song as `status='pending'` would
+  re-download and re-run Demucs — minutes of work to fix lyrics. The align queue
+  only needs `vocals.ogg`, which is already on the server. Same compare-and-swap as
+  `/api/jobs/pending`, so two workers can't align one song twice.
+- **`align_status` is deliberately not folded into `jobs.status`** — the library card
+  renders off that ([ui.js](../static/js/ui.js)) and the song must stay playable
+  while its lyrics are being timed.
+- **The worker's own LRCLIB fetch was deleted.** It was one-shot, hit only the strict
+  `/api/get`, looked at `data[0]` alone, and swallowed every exception into "no
+  lyrics". It now calls `POST /api/jobs/{id}/fetch-lyrics` and inherits the server's
+  ladder — and, critically, the server's distinction between a network failure (502)
+  and a genuine miss (404), which is exactly what decides whether to align.
+- `duration_sec` is PATCHed **before** that call: LRCLIB's strict match needs it, and
+  writing it only in the final patch silently downgraded every song to fuzzy search.
+
+`sheet_parse.py` is a faithful port of the classifier in `chords.js` — not an
+approximation. It has to select exactly the lines `assignTimestamps()` will try to
+time, or the generated LRC times lines the sheet never renders. `_CHORD_NAME_RE` in
+`routes.py` is unanchored and only ranks whole `<pre>` blocks; it must **not** be
+reused as a line classifier. Parity is verified against all 35 stored sheets.
+
+**`clean_for_align()` is deliberately narrower than `sheet_lyric_lines()`**, and that
+split is load-bearing: what gets *rendered* and what gets *aligned* are different
+questions. Whisper places every line it is given (`original_split=True`), so a line
+that isn't sung doesn't get skipped — it gets placed anyway, stealing time from a real
+neighbouring line. So the aligner additionally drops:
+
+- **Guitar tab rows** (`E|-----------|`) — 56 of them across the 35 sheets. The parser
+  classifies them as lyrics because they aren't chord *tokens*.
+- **Hyphen/comma chord groups** (`A# Dm-Gm-Cm-F-A#`). `is_chord_line()` tests one
+  whitespace token at a time, so a whole chord row hides in the lyric branch.
+- **Section labels** (`Coro`, `Verso2`, `Punteo del puente:`) — `is_metadata_line()`
+  misses them because it requires `word:` followed by *whitespace*.
+
+Filtering here needs **no change in `chords.js`**, which is exactly why it lives here
+and not in the shared classifier. The label rule is kept narrow on purpose — a false
+positive silently deletes a real lyric line — so `solo` and `final` are absent from
+`_SECTION_WORDS` (both are ordinary Spanish words) and a bare label must be a single
+token, optionally followed by a number. Verified against the 31 songs with known-good
+LRCLIB lyrics: of the 93 lines dropped, none appear in the actual sung lyrics.
 
 ### Job claiming & worker routing (`routes.py:get_pending`)
 `/api/jobs/pending` used to be a bare `SELECT ... WHERE status='pending' LIMIT 1` with no
@@ -343,7 +431,28 @@ Single-page app — views are hidden/shown by toggling `display`. Main views:
 - `#library-view` — home/song list
 - `#player-view` — active song
 
-`#sheet` (add song), `#settings-panel`, and `#player-actions-sheet` are overlays.
+`#sheet` (add song), `#edit-sheet` (edit title/artist), `#settings-panel`, and
+`#player-actions-sheet` are overlays.
+
+### Editing a song's title/artist
+A YouTube title arrives as one string and `_parse_yt_title` has to guess which half is
+the artist — it guesses wrong often enough to need a fix-up. Not cosmetic: title and
+artist are what the **LRCLIB and Cifra Club lookups search with**, so a wrong one costs
+the song its lyrics *and* its chord sheet.
+
+- Reached from the **pencil on each library card**, not from the player: a card is only
+  clickable once it's `done`, so a `pending` or `error` song could never be corrected
+  from the player — and that's precisely when fixing the title still changes the outcome.
+- `#edit-sheet` reuses `#sheet`'s CSS geometry (shared selector list in `app.css`) so the
+  1024px max-width offset lives in exactly one place.
+- The **Swap** button exists for the specific failure above. Saving also updates an open
+  player's header when it's the same song.
+- A blank artist **clears** the field; a blank title is rejected. That follows
+  `patch_job`, where `None` means "don't touch" but `""` is written — so there's no way
+  to blank a title by accident and leave the song unsearchable.
+- Renaming touches only `title`/`artist`; `chord_data`, `chord_sheet` and the align
+  columns are left alone. After a fix, re-run **Lyrics** / **Sheet** / **Sync** to
+  benefit from the corrected search terms.
 
 ### Player flow
 1. User selects song -> `openPlayer(job)` -> calls `GET /api/stems/{id}`
@@ -383,6 +492,10 @@ Volume stepper, tempo stepper, tiles (Sheet, BPM), Lyrics pills. Steppers share
   `get_stem`, `upload_stem`, `upload_source`, `delete_job` and the sync PUT. Without them
   `POST /api/jobs/x/stems/../../app/foo.py` was an unauthenticated arbitrary file write.
   Note `.part` names are deliberately rejected from the network — they are internal only.
+- **Both `detect-bpm` and `fetch-cifra` are `async def` doing blocking work in the event
+  loop**, so they stall stem streaming for whoever is playing. Pre-existing and out of
+  scope, noted because `align-lyrics` must not repeat it — it only flips a flag, and
+  `fetch-lyrics` is deliberately declared `def` so FastAPI threadpools it.
 - **`patch_job` cannot clear a field or set timestamps**: `None` means "don't touch", and
   `updated_at` is always restamped locally. That's right for UI edits and wrong for sync,
   which is why `PUT /api/sync/jobs/{id}` exists as a separate whole-row upsert rather than
@@ -398,6 +511,15 @@ Volume stepper, tempo stepper, tiles (Sheet, BPM), Lyrics pills. Steppers share
   without symlinking `components/` and `static/` into a second working directory; the
   sync token on `worker.py`'s stem upload; surfacing `worker_seen:{name}` rows in Settings
   so you can see *which* worker is alive rather than just "a worker is"
-- Chord sheet timing still relies on an LRC to anchor lines; songs with no LRC now fall back to Autoscroll (constant rate) rather than following the song properly
+- Chord sheet timing still relies on an LRC to anchor lines, but that LRC no longer has
+  to come from LRCLIB — the worker generates one locally from the vocals stem (see Local
+  lyric alignment). Autoscroll is now the fallback only when there is no lyric *text* at
+  all to align, or the alignment failed
+- Alignment accuracy is unmeasured. All 35 songs bar three already have real LRCLIB
+  synced lyrics, which is free ground truth: align each from the *sheet* text, diff
+  against the known-good LRC, and pick the Phase 2 score threshold from data rather
+  than guessing. Worth doing before trusting a low score
+- Phase 2 (submitting good alignments back to LRCLIB) needs `albumName`, which has no
+  column — expect a second migration and a manual backfill
 - Wake lock is untested on device (both Mac and phone)
 - Sheet font size (`--cs-font-size`) may want a user-facing control rather than a CSS constant

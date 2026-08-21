@@ -53,7 +53,13 @@ def init_db():
                 progress_phase TEXT,
                 error_msg TEXT,
                 created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                -- Local lyric alignment. Deliberately NOT folded into `status`:
+                -- the library card renders off that, and the song has to stay
+                -- playable while its lyrics are being timed.
+                align_status TEXT,
+                align_score REAL,
+                align_text_source TEXT
             );
 
             CREATE TABLE IF NOT EXISTS settings (
@@ -109,6 +115,12 @@ def init_db():
             ("chord_sheet", "TEXT"),
             # % of "scroll the sheet to the end exactly as the song finishes"
             ("scroll_speed", "INTEGER NOT NULL DEFAULT 100"),
+            # NULL | pending | running | done | error
+            ("align_status", "TEXT"),
+            # 0..1 confidence of the last local alignment
+            ("align_score", "REAL"),
+            # lrclib-plain | cifra | manual — which text was aligned
+            ("align_text_source", "TEXT"),
         ]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {ddl}")

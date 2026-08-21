@@ -61,6 +61,11 @@ function renderCard(job) {
       <div class="w-2 h-2 rounded-full flex-shrink-0" style="background:${col}"></div>
       <div class="flex items-center gap-2">
         <span class="text-xs" style="color:${col}">${lbl}</span>
+        <button class="edit-btn p-0.5 text-[#86efac] opacity-30 hover:opacity-80 hover:text-[#22c55e] transition-opacity active:scale-95" title="Edit title and artist">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/>
+          </svg>
+        </button>
         <button class="delete-btn p-0.5 text-[#86efac] opacity-30 hover:opacity-80 hover:text-[#f87171] transition-opacity active:scale-95" title="Delete song">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
@@ -83,6 +88,12 @@ function renderCard(job) {
   if (job.status === 'done') {
     el.addEventListener('click', () => openPlayer(job));
   }
+
+  // Both live inside the card, which is itself the "open player" button
+  el.querySelector('.edit-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    openEditSong(job);
+  });
 
   el.querySelector('.delete-btn').addEventListener('click', e => {
     e.stopPropagation();
@@ -139,6 +150,77 @@ async function confirmDelete(job) {
   refreshLibrary();
 }
 
+// ── Edit song metadata ────────────────────────────────────────────────────────
+// A YouTube title arrives as one string and `_parse_yt_title` has to guess which
+// half is the artist — it guesses wrong often enough to need a fix-up. This is
+// more than cosmetic: title and artist are what the LRCLIB and Cifra Club lookups
+// search with, so a wrong one costs the song its lyrics and its chord sheet.
+//
+// Reached from the library rather than the player on purpose: a card is only
+// clickable once it's `done`, so a pending or errored song could never be
+// corrected from the player at all — and that's exactly when fixing the title
+// still changes the outcome.
+
+let _editJob = null;
+
+function openEditSong(job) {
+  _editJob = job;
+  $('edit-title').value  = job.title || '';
+  $('edit-artist').value = job.artist || '';
+  $('edit-error').classList.add('hidden');
+  $('edit-sheet').classList.add('open');
+  $('edit-backdrop').classList.add('open');
+  $('edit-title').focus();
+}
+
+function closeEditSong() {
+  $('edit-sheet').classList.remove('open');
+  $('edit-backdrop').classList.remove('open');
+  _editJob = null;
+}
+
+function swapTitleArtist() {
+  const title = $('edit-title').value;
+  $('edit-title').value  = $('edit-artist').value;
+  $('edit-artist').value = title;
+}
+
+async function saveEditSong() {
+  if (!_editJob) return;
+  const title  = $('edit-title').value.trim();
+  const artist = $('edit-artist').value.trim();
+  const err    = $('edit-error');
+  // patch_job treats null as "don't touch" but writes an empty string, so a blank
+  // artist clears it — a blank title would leave the song unsearchable instead.
+  if (!title) {
+    err.textContent = 'A title is required — it is what the lyrics search uses.';
+    err.classList.remove('hidden');
+    return;
+  }
+  const jobId = _editJob.id;
+  const btn   = $('edit-save');
+  btn.disabled = true;
+  try {
+    await api(`/api/jobs/${jobId}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ title, artist }),
+    });
+    // Keep an open player's header honest about the song it's playing
+    if (_currentPlayerJobId === jobId) {
+      $('player-title').textContent  = title;
+      $('player-artist').textContent = artist;
+    }
+    closeEditSong();
+    refreshLibrary();
+  } catch (e) {
+    err.textContent = e.message || 'Failed to save';
+    err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Player ────────────────────────────────────────────────────────────────────
 
 async function openPlayer(job) {
@@ -177,6 +259,8 @@ async function openPlayer(job) {
 function closePlayer() {
   resetPlayer();
   resetLyrics();
+  stopAlignPoll();
+  _currentPlayerJobId = null;
   closePlayerActions();
   showLibrary();
 }
@@ -288,6 +372,110 @@ async function fetchLyrics() {
   } finally {
     if (_currentPlayerJobId === jobId) btn.disabled = false;
   }
+}
+
+// ── Local lyric alignment ─────────────────────────────────────────────────────
+// The server only flips a flag; a worker does the work off /api/jobs/pending-align.
+// So this is fire-and-poll, and the poller belongs to the tile — the player view
+// has no loop of its own to hang it on.
+
+const ALIGN_POLL_MS = 3000;
+let _alignPoll = null;
+
+function stopAlignPoll() {
+  clearInterval(_alignPoll);
+  _alignPoll = null;
+}
+
+function setAlignLabel(text) { $('lyrics-align-label').textContent = text; }
+
+async function alignLyrics() {
+  if (!_currentPlayerJobId) return;
+  const jobId = _currentPlayerJobId;
+  const btn = $('lyrics-align-btn');
+  btn.disabled = true;
+  setAlignLabel('…');
+  try {
+    await api(`/api/jobs/${jobId}/align-lyrics`, { method: 'POST' });
+  } catch (e) {
+    if (_currentPlayerJobId !== jobId) return;
+    btn.disabled = false;
+    // 409 is the "you already have real synced lyrics" guard — worth overriding
+    // by hand, never by default.
+    if (/already has synced lyrics/i.test(e.message)) {
+      setAlignLabel('Sync');
+      if (confirm('This song already has synced lyrics from LRCLIB. Re-time them locally anyway?')) {
+        forceAlignLyrics(jobId);
+      }
+      return;
+    }
+    setAlignLabel('RETRY');
+    alert(e.message);
+    return;
+  }
+  watchAlign(jobId);
+}
+
+async function forceAlignLyrics(jobId) {
+  const btn = $('lyrics-align-btn');
+  btn.disabled = true;
+  setAlignLabel('…');
+  try {
+    await api(`/api/jobs/${jobId}/align-lyrics?force=1`, { method: 'POST' });
+  } catch (e) {
+    if (_currentPlayerJobId !== jobId) return;
+    btn.disabled = false;
+    setAlignLabel('RETRY');
+    alert(e.message);
+    return;
+  }
+  watchAlign(jobId);
+}
+
+// Queued work needs a worker to be up, which may take a while — the label carries
+// progress_phase so the wait reads as "waiting", not "broken".
+function watchAlign(jobId) {
+  stopAlignPoll();
+  $('lyrics-align-btn').disabled = true;
+  setAlignLabel('QUEUED');
+  _alignPoll = setInterval(async () => {
+    if (_currentPlayerJobId !== jobId) { stopAlignPoll(); return; }
+    let job;
+    try { job = await api(`/api/jobs/${jobId}`); } catch (e) { return; }
+    if (_currentPlayerJobId !== jobId) { stopAlignPoll(); return; }
+
+    if (job.align_status === 'running') {
+      setAlignLabel(job.progress_phase === 'Aligning lyrics…' ? 'SYNCING' : 'RUNNING');
+      return;
+    }
+    if (job.align_status === 'pending') return;   // still waiting for a worker
+
+    stopAlignPoll();
+    $('lyrics-align-btn').disabled = false;
+    if (job.align_status === 'error') {
+      setAlignLabel('FAILED');
+      return;
+    }
+    // done — reload the timed lyrics into the view
+    try {
+      const data = await api(`/api/stems/${jobId}`);
+      if (_currentPlayerJobId !== jobId) return;
+      resetLyrics();
+      initLyrics(data.chord_data, data.chord_source, data.chord_sheet);
+      setSongDuration(data.duration_sec || getDuration());
+      applyAutoscrollDefault(data.scroll_speed);
+      showAlignScore(data.align_score);
+    } catch (e) {
+      console.error('reload aligned lyrics:', e);
+      setAlignLabel('Sync');
+    }
+  }, ALIGN_POLL_MS);
+}
+
+// A weak alignment is used anyway, so the score has to be visible rather than
+// silently trusted.
+function showAlignScore(score) {
+  setAlignLabel(score ? `✓ ${Number(score).toFixed(2)}` : '✓ SYNCED');
 }
 
 // Autoscroll turns itself on for songs with nothing timed to follow — that is
@@ -425,6 +613,18 @@ function applySongMeta(jobId, data) {
   applyAutoscrollDefault(data.scroll_speed);
   $('lyrics-fetch-label').textContent = 'Lyrics';
   $('lyrics-fetch-btn').disabled = false;
+
+  // A queued alignment survives closing the player, so pick the poll back up
+  // rather than showing an idle tile over work that is still in flight.
+  stopAlignPoll();
+  $('lyrics-align-btn').disabled = false;
+  if (data.align_status === 'pending' || data.align_status === 'running') {
+    watchAlign(jobId);
+  } else if (data.align_status === 'done' && data.chord_source === 'aligned') {
+    showAlignScore(data.align_score);
+  } else {
+    setAlignLabel('Sync');
+  }
 }
 
 async function detectBPM() {
@@ -754,8 +954,9 @@ $('add-btn').addEventListener('click',       submitSong);
 // Chord detect BPM
 $('chord-detect-btn').addEventListener('click', detectBPM);
 
-// Lyrics fetch + autoscroll fallback
+// Lyrics fetch + local alignment + autoscroll fallback
 $('lyrics-fetch-btn').addEventListener('click',   fetchLyrics);
+$('lyrics-align-btn').addEventListener('click',   alignLyrics);
 $('autoscroll-toggle').addEventListener('click',  toggleAutoscroll);
 $('autoscroll-down').addEventListener('click',    () => stepAutoscroll(-AS_STEP));
 $('autoscroll-up').addEventListener('click',      () => stepAutoscroll(AS_STEP));
@@ -767,6 +968,14 @@ $('chord-sheet-cancel').addEventListener('click',   closeChordSheetModal);
 $('chord-sheet-save').addEventListener('click',     saveChordSheet);
 $('chord-sheet-clear-btn').addEventListener('click', clearChordSheet);
 $('cifra-fetch-btn').addEventListener('click',      fetchCifraSheet);
+
+// Edit song sheet
+$('edit-backdrop').addEventListener('click', closeEditSong);
+$('edit-cancel').addEventListener('click',   closeEditSong);
+$('edit-swap').addEventListener('click',     swapTitleArtist);
+$('edit-save').addEventListener('click',     saveEditSong);
+['edit-title', 'edit-artist'].forEach(id =>
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') saveEditSong(); }));
 
 // Settings
 $('settings-backdrop').addEventListener('click', closeSettings);

@@ -1,7 +1,18 @@
 # Local Lyric Alignment — Phase 1
 
-> Status: planned, not implemented.
+> Status: **implemented**. See CLAUDE.md for the resulting shape of the code.
 > Phase 2 (submitting results back to LRCLIB) is a separate document.
+>
+> Deltas from the plan as written, all deliberate:
+> - `lyric_align.py` gained `--original`, because the aligner has to *see* the cleaned
+>   text and *emit* the original. One `--text` file could not carry both.
+> - The worker now PATCHes `duration_sec` before asking for lyrics. LRCLIB's strict
+>   `/api/get` match needs it, and it used to be written only in the final patch — so
+>   every song was silently downgraded to the fuzzy `/api/search` endpoint.
+> - `--align-device` is its own flag rather than following `--device`: Demucs wants MPS,
+>   Whisper can't have it.
+> - The library is 35 songs, not the 7 the plan assumed; the parser-parity check was
+>   run against all of them (35/35 byte-identical to the browser).
 
 ## Context
 

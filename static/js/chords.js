@@ -32,7 +32,9 @@ export function resetLyrics() {
 }
 
 export function initLyrics(chordData, chordSource, chordSheet) {
-  if (chordSource === 'lrclib' && chordData) {
+  // 'aligned' is an LRC the worker timed locally against the vocals stem — same
+  // format, so everything downstream treats it exactly like an LRCLIB one.
+  if ((chordSource === 'lrclib' || chordSource === 'aligned') && chordData) {
     parsedLyrics = parseLRC(chordData);
     hasLyrics    = parsedLyrics.length > 0;
   } else if (chordSource === 'lrclib-plain' && chordData) {

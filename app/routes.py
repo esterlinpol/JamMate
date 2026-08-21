@@ -119,6 +119,9 @@ class JobPatch(BaseModel):
     bar_offset: Optional[int] = None
     chord_sheet: Optional[str] = None
     scroll_speed: Optional[int] = None
+    align_status: Optional[str] = None
+    align_score: Optional[float] = None
+    align_text_source: Optional[str] = None
 
 
 class SettingsPatch(BaseModel):
@@ -208,6 +211,37 @@ async def get_pending(device: str = "", worker: str = ""):
     return {"job": job}
 
 
+# Declared before /api/jobs/{job_id} — FastAPI matches in order, so a literal path
+# segment has to be registered ahead of the catch-all.
+@router.get("/api/jobs/pending-align")
+async def get_pending_align(worker: str = ""):
+    """Claim the next song queued for local lyric alignment.
+
+    A separate queue from /api/jobs/pending because source audio isn't retained:
+    re-queueing with status='pending' would re-download and re-run Demucs, minutes
+    of work to fix lyrics. This path only needs vocals.ogg, which is already on the
+    server. Same compare-and-swap so two workers can't align the same song.
+    """
+    now = time.time()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE status = 'done' AND align_status = 'pending'"
+            " ORDER BY updated_at ASC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return {"job": None}
+        cur = conn.execute(
+            "UPDATE jobs SET align_status = 'running', updated_at = ?"
+            " WHERE id = ? AND align_status = 'pending'",
+            (now, row["id"]),
+        )
+        if cur.rowcount == 0:
+            return {"job": None}
+        job = dict(row)
+        job.update(align_status="running", updated_at=now)
+    return {"job": job}
+
+
 @router.get("/api/jobs/{job_id}")
 async def get_job(job_id: str):
     with db() as conn:
@@ -262,7 +296,7 @@ async def delete_job(job_id: str):
 async def get_stems(job_id: str):
     with db() as conn:
         row = conn.execute(
-            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec, song_chord_data, bpm, beat_times, beat_offset, bar_offset, chord_sheet, scroll_speed FROM jobs WHERE id = ?",
+            "SELECT status, filename, chord_data, chord_source, chord_source_url, capo, duration_sec, song_chord_data, bpm, beat_times, beat_offset, bar_offset, chord_sheet, scroll_speed, align_status, align_score, align_text_source FROM jobs WHERE id = ?",
             (job_id,)
         ).fetchone()
     if not row:
@@ -290,6 +324,9 @@ async def get_stems(job_id: str):
         "bar_offset": row["bar_offset"] or 0,
         "chord_sheet": row["chord_sheet"],
         "scroll_speed": row["scroll_speed"] or 100,
+        "align_status": row["align_status"],
+        "align_score": row["align_score"],
+        "align_text_source": row["align_text_source"],
     }
 
 
@@ -609,8 +646,46 @@ def fetch_lyrics(job_id: str):
     return {
         "chord_data": chord_data,
         "chord_source": chord_source,
-        "synced": chord_source == "lrclib",
+        "synced": chord_source in ("lrclib", "aligned"),
     }
+
+
+# ── Local lyric alignment ─────────────────────────────────────────────────────
+# The server does zero compute here: it flips a flag and a worker picks the song
+# up off /api/jobs/pending-align. Nothing in this file may import torch — the
+# server container has neither torch nor numpy installed.
+
+@router.post("/api/jobs/{job_id}/align-lyrics")
+async def align_lyrics(job_id: str, force: int = 0):
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status, chord_data, chord_source, chord_sheet FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            return JSONResponse({"error": "job not found"}, status_code=404)
+        if row["status"] != "done":
+            return JSONResponse(
+                {"error": "song is still processing"}, status_code=409
+            )
+        # Real synced lyrics from LRCLIB beat anything computed locally, so they
+        # are never clobbered by accident.
+        if row["chord_source"] == "lrclib" and not force:
+            return JSONResponse(
+                {"error": "This song already has synced lyrics from LRCLIB."},
+                status_code=409,
+            )
+        has_plain = row["chord_source"] == "lrclib-plain" and row["chord_data"]
+        if not row["chord_sheet"] and not has_plain:
+            return JSONResponse(
+                {"error": "Nothing to align — import a chord sheet or fetch lyrics first."},
+                status_code=422,
+            )
+        conn.execute(
+            "UPDATE jobs SET align_status = 'pending', updated_at = ? WHERE id = ?",
+            (time.time(), job_id),
+        )
+    return JSONResponse({"align_status": "pending"}, status_code=202)
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
