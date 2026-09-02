@@ -164,6 +164,10 @@ def _download_youtube(url: str, dest_dir: Path) -> tuple[Path, str, str]:
         }],
         "quiet": True,
         "no_warnings": True,
+        # YouTube needs a JS runtime to solve the signature challenge; without one
+        # some formats are missing and the data fetch 403s. yt-dlp only enables
+        # deno by default, so add node — deno keeps priority when it's installed.
+        "js_runtimes": {"deno": {}, "node": {}},
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)

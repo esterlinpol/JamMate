@@ -68,6 +68,14 @@ input, select { background: #0a0f0a; color: #f0fdf4; border: 1px solid #1e2e1e;
 input:focus, select:focus { border-color: #22c55e; box-shadow: 0 0 0 2px rgba(34,197,94,0.15); }
 select option { background: #111811; }
 
+/* Library toolbar — compact overrides of the base input/select rules above.
+   The search box carries the magnifier on the left and the clear button on the
+   right, so both sides need room the shared padding doesn't leave. */
+.library-search { padding: 8px 30px 8px 34px; font-size: 0.85rem; border-radius: 10px; }
+.library-search::-webkit-search-cancel-button { display: none; }
+.library-sort { width: auto; flex-shrink: 0; padding: 8px 10px; font-size: 0.8rem;
+  border-radius: 10px; }
+
 button { touch-action: manipulation; }
 button:active { transform: scale(0.96); }
 .no-scale:active { transform: none; }

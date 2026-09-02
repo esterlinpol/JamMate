@@ -114,16 +114,73 @@ function renderCard(job) {
   return el;
 }
 
+// ── Search + sort ─────────────────────────────────────────────────────────────
+// Both are client-side: /api/jobs already returns the whole library in one call,
+// so filtering here keeps the 5s poll from re-querying and, more importantly,
+// keeps the typed term stable while the poll re-renders underneath it.
+
+const SORT_KEY = 'jammate.librarySort';
+let _libraryJobs = [];
+
+// Accent-insensitive: the library is largely Spanish, so "cancion" must find
+// "Canción" — same reasoning as smartMatchLyrics() in chords.js.
+const fold = s => String(s || '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+// A song with no artist sorts last rather than first — an empty string would
+// otherwise head the list and bury the named songs below it.
+const byText = key => (a, b) => {
+  const x = fold(a[key]), y = fold(b[key]);
+  if (!x !== !y) return x ? -1 : 1;
+  return x.localeCompare(y) || fold(a.title).localeCompare(fold(b.title));
+};
+
+const SORTERS = {
+  recent: (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')),
+  title:  byText('title'),
+  artist: byText('artist'),
+};
+
+function getSort() {
+  const v = $('library-sort').value;
+  return SORTERS[v] ? v : 'recent';
+}
+
+function visibleJobs() {
+  const term = fold($('library-search').value);
+  const rows = term
+    ? _libraryJobs.filter(j =>
+        fold(j.title).includes(term) ||
+        fold(j.artist).includes(term) ||
+        fold(j.filename).includes(term))
+    : _libraryJobs.slice();
+  return rows.sort(SORTERS[getSort()]);
+}
+
+// Render from the cache — no fetch, so it is cheap enough to call on every
+// keystroke.
+function renderLibrary() {
+  const grid  = $('song-grid');
+  const empty = $('empty-state');
+  const none  = $('no-results');
+  const term  = $('library-search').value.trim();
+
+  $('library-search-clear').classList.toggle('hidden', !term);
+
+  const rows = visibleJobs();
+  grid.innerHTML = '';
+  empty.classList.toggle('hidden', _libraryJobs.length > 0);
+  none.classList.toggle('hidden', !(_libraryJobs.length && !rows.length));
+  $('no-results-term').textContent = term ? `“${term}”` : '';
+
+  rows.forEach(j => grid.appendChild(renderCard(j)));
+  updateBanner(_libraryJobs);
+}
+
 async function refreshLibrary() {
   try {
-    const jobs = await api('/api/jobs');
-    const grid  = $('song-grid');
-    const empty = $('empty-state');
-    grid.innerHTML = '';
-    if (!jobs.length) { empty.classList.remove('hidden'); return; }
-    empty.classList.add('hidden');
-    jobs.forEach(j => grid.appendChild(renderCard(j)));
-    updateBanner(jobs);
+    _libraryJobs = await api('/api/jobs');
+    renderLibrary();
   } catch (e) { console.error('library refresh:', e); }
 }
 
@@ -905,6 +962,19 @@ function startPolling() {
 
 // Library
 $('btn-refresh').addEventListener('click', refreshLibrary);
+$('library-search').addEventListener('input', renderLibrary);
+$('library-search').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { $('library-search').value = ''; renderLibrary(); }
+});
+$('library-search-clear').addEventListener('click', () => {
+  $('library-search').value = '';
+  $('library-search').focus();
+  renderLibrary();
+});
+$('library-sort').addEventListener('change', () => {
+  try { localStorage.setItem(SORT_KEY, getSort()); } catch (e) { /* private mode */ }
+  renderLibrary();
+});
 $('btn-settings').addEventListener('click', openSettings);
 $('btn-add').addEventListener('click', openAddSheet);
 
@@ -988,5 +1058,9 @@ $('sync-now').addEventListener('click', syncNow);
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 switchTab('upload');
+try {
+  const saved = localStorage.getItem(SORT_KEY);
+  if (saved && SORTERS[saved]) $('library-sort').value = saved;
+} catch (e) { /* private mode — fall back to Recent */ }
 refreshLibrary();
 startPolling();

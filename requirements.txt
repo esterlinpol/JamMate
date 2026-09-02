@@ -8,7 +8,9 @@ certifi>=2024.0.0
 
 # Worker
 demucs>=4.0.0
-yt-dlp>=2024.0.0
+# Keep current: YouTube breaks yt-dlp every few months (HTTP 403 on the data
+# fetch is the usual symptom). Upgrade first when a download starts failing.
+yt-dlp>=2026.8.19
 requests>=2.31.0
 numpy>=1.24.0
 soundfile>=0.12.0
